@@ -409,6 +409,32 @@ table.preview .more-row td {
   font-size: 1.1rem; line-height: 1; padding: 6px; border-radius: 6px;
 }
 .lib-close:hover { color: var(--text); }
+/* library toolbar: search + export/import */
+.lib-toolbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.lib-search {
+  flex: 1 1 180px; min-width: 0; font: inherit; font-size: 0.95rem; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 9px 12px; min-height: 42px;
+  transition: border-color var(--t), box-shadow var(--t);
+}
+.lib-search:focus {
+  outline: none; border-color: var(--accent-1);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25);
+}
+.lib-search::placeholder { color: var(--text-faint); }
+.lib-toolbar-actions { display: flex; gap: 6px; flex: none; }
+
+/* inline rename field — sized like the title it replaces */
+.lib-rename {
+  width: 100%; font: inherit; font-size: 0.98rem; font-weight: 700; color: var(--text);
+  background: var(--surface); border: 1px solid var(--accent-1);
+  border-radius: 8px; padding: 4px 8px;
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25);
+}
+.lib-rename:focus { outline: none; }
+
 .lib-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .lib-item {
   display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
@@ -418,7 +444,7 @@ table.preview .more-row td {
 .lib-info { display: flex; flex-direction: column; min-width: 0; }
 .lib-name { font-weight: 700; font-size: 0.98rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lib-meta { color: var(--text-faint); font-size: 0.8rem; }
-.lib-acts { display: flex; gap: 6px; flex: none; }
+.lib-acts { display: flex; gap: 6px; flex-wrap: wrap; }
 .lib-act {
   appearance: none; cursor: pointer; font: inherit; font-size: 0.84rem; font-weight: 600;
   color: var(--text); background: var(--surface); border: 1px solid var(--border);

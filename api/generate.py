@@ -23,7 +23,11 @@ from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
 from openpyxl.chart.series import SeriesLabel
 from openpyxl.utils import get_column_letter
-from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles.differential import DifferentialStyle
+from openpyxl.formatting.rule import CellIsRule, ColorScaleRule, Rule
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.workbook.defined_name import DefinedName
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +43,14 @@ MAX_CHARTS = 6
 MIN_CHARTS = 0
 MAX_VALUE_COLUMNS = 10
 MIN_VALUE_COLUMNS = 1
+MAX_CONDITIONAL_FORMATS = 20
+MIN_CONDITIONAL_FORMATS = 0
+MAX_DATA_VALIDATIONS = 20
+MIN_DATA_VALIDATIONS = 0
+MAX_VALIDATION_VALUES = 200
+MIN_VALIDATION_VALUES = 1
+MAX_NAMED_RANGES = 50
+MIN_NAMED_RANGES = 0
 
 # Abuse / resource caps (defense-in-depth; the body cap is the primary guard).
 MAX_BODY_BYTES = 4 * 1024 * 1024   # 4 MB request body
@@ -49,6 +61,31 @@ MAX_TOTAL_CELLS = 200_000          # across the whole workbook
 
 VALID_COLUMN_TYPES = {"text", "number", "currency", "percent", "date", "formula"}
 VALID_CHART_TYPES = {"bar", "line", "pie"}
+
+# Column types that get a live =SUM in a totals row.
+SUMMABLE_TYPES = {"number", "currency", "percent", "formula"}
+
+# Conditional-format rule names (docs/SPEC.md §2).
+COMPARISON_RULES = {
+    "greaterThan", "greaterThanOrEqual", "lessThan", "lessThanOrEqual",
+    "equal", "between",
+}
+VALID_CONDFMT_RULES = COMPARISON_RULES | {"top10", "bottom10", "colorScale"}
+
+# Friendly colour names -> standard light fill hex (no leading alpha).
+CONDFMT_COLORS = {
+    "red": "FFC7CE",
+    "green": "C6EFCE",
+    "yellow": "FFEB9C",
+    "orange": "FFD8A8",
+    "blue": "BDD7EE",
+}
+_HEX6 = re.compile(r"^[0-9A-Fa-f]{6}$")
+
+# 3-colour scale endpoints for colorScale rules (light red -> yellow -> green).
+COLORSCALE_MIN = "F8696B"
+COLORSCALE_MID = "FFEB84"
+COLORSCALE_MAX = "63BE7B"
 
 # Column type -> Excel number format (docs/SPEC.md §2 table).
 TYPE_FORMATS = {
@@ -62,6 +99,9 @@ TYPE_FORMATS = {
 
 HEADER_FILL = PatternFill(start_color="FFE8EEF7", end_color="FFE8EEF7", fill_type="solid")
 HEADER_FONT = Font(bold=True)
+
+TOTAL_FONT = Font(bold=True)
+TOTAL_TOP_BORDER = Border(top=Side(style="thin"))
 
 MIN_COL_WIDTH = 10
 MAX_COL_WIDTH = 40
@@ -217,6 +257,136 @@ def _validate_spec(spec):
                 if not isinstance(val, int) or isinstance(val, bool) or val < 1:
                     raise SpecError("%s: %s must be a positive integer." % (chwhere, key))
 
+        # --- totalsRow (optional bool) ---
+        totals = sheet.get("totalsRow")
+        if totals is not None and not isinstance(totals, bool):
+            raise SpecError("%s: totalsRow must be a boolean." % where)
+
+        # --- conditionalFormats (optional list) ---
+        cond_fmts = sheet.get("conditionalFormats")
+        if cond_fmts is None:
+            cond_fmts = []
+        if not isinstance(cond_fmts, list):
+            raise SpecError("%s: conditionalFormats must be a list." % where)
+        if not (MIN_CONDITIONAL_FORMATS <= len(cond_fmts) <= MAX_CONDITIONAL_FORMATS):
+            raise SpecError(
+                "%s: must have between %d and %d conditionalFormats (got %d)."
+                % (where, MIN_CONDITIONAL_FORMATS, MAX_CONDITIONAL_FORMATS, len(cond_fmts))
+            )
+        for cfi, cf in enumerate(cond_fmts):
+            cfwhere = "%s, conditionalFormat %d" % (where, cfi + 1)
+            if not isinstance(cf, dict):
+                raise SpecError("%s must be an object." % cfwhere)
+            col = cf.get("column")
+            if not isinstance(col, int) or isinstance(col, bool):
+                raise SpecError("%s: column must be an integer." % cfwhere)
+            if not (1 <= col <= n_cols):
+                raise SpecError(
+                    "%s: column %d out of range (1..%d)." % (cfwhere, col, n_cols)
+                )
+            rule = cf.get("rule")
+            if rule not in VALID_CONDFMT_RULES:
+                raise SpecError(
+                    "%s: invalid rule %r (allowed: %s)."
+                    % (cfwhere, rule, ", ".join(sorted(VALID_CONDFMT_RULES)))
+                )
+            if rule in COMPARISON_RULES:
+                value = cf.get("value")
+                if not isinstance(value, (int, float, str)) or isinstance(value, bool):
+                    raise SpecError(
+                        "%s: rule %r requires a numeric or string 'value'."
+                        % (cfwhere, rule)
+                    )
+                if rule == "between":
+                    value2 = cf.get("value2")
+                    if not isinstance(value2, (int, float, str)) or isinstance(value2, bool):
+                        raise SpecError(
+                            "%s: rule 'between' requires a numeric or string 'value2'."
+                            % cfwhere
+                        )
+            # Colour (used by comparison + top10/bottom10; colorScale ignores it).
+            color = cf.get("color")
+            if color is not None:
+                if not isinstance(color, str) or _resolve_fill_hex(color) is None:
+                    raise SpecError(
+                        "%s: invalid color %r (use red/green/yellow/orange/blue "
+                        "or a 6-hex)." % (cfwhere, color)
+                    )
+
+        # --- dataValidations (optional list) ---
+        validations = sheet.get("dataValidations")
+        if validations is None:
+            validations = []
+        if not isinstance(validations, list):
+            raise SpecError("%s: dataValidations must be a list." % where)
+        if not (MIN_DATA_VALIDATIONS <= len(validations) <= MAX_DATA_VALIDATIONS):
+            raise SpecError(
+                "%s: must have between %d and %d dataValidations (got %d)."
+                % (where, MIN_DATA_VALIDATIONS, MAX_DATA_VALIDATIONS, len(validations))
+            )
+        for dvi, dv in enumerate(validations):
+            dvwhere = "%s, dataValidation %d" % (where, dvi + 1)
+            if not isinstance(dv, dict):
+                raise SpecError("%s must be an object." % dvwhere)
+            col = dv.get("column")
+            if not isinstance(col, int) or isinstance(col, bool):
+                raise SpecError("%s: column must be an integer." % dvwhere)
+            if not (1 <= col <= n_cols):
+                raise SpecError(
+                    "%s: column %d out of range (1..%d)." % (dvwhere, col, n_cols)
+                )
+            values = dv.get("values")
+            if not isinstance(values, list):
+                raise SpecError("%s: values must be a list." % dvwhere)
+            if not (MIN_VALIDATION_VALUES <= len(values) <= MAX_VALIDATION_VALUES):
+                raise SpecError(
+                    "%s: values must have between %d and %d entries (got %d)."
+                    % (dvwhere, MIN_VALIDATION_VALUES, MAX_VALIDATION_VALUES, len(values))
+                )
+            for v in values:
+                if not isinstance(v, (int, float, str)) or isinstance(v, bool):
+                    raise SpecError(
+                        "%s: values entries must be strings or numbers." % dvwhere
+                    )
+            # Excel's inline list-validation source (formula1) is limited to 255
+            # chars; reject loudly rather than emit a workbook Excel will "repair".
+            joined = ",".join(str(v).replace(",", " ").replace('"', '""') for v in values)
+            if len(joined) + 2 > 255:
+                raise SpecError(
+                    "%s: the dropdown list is too long; keep the combined options "
+                    "under ~250 characters." % dvwhere
+                )
+
+    # --- namedRanges (workbook-level, optional list) ---
+    named = spec.get("namedRanges")
+    if named is None:
+        named = []
+    if not isinstance(named, list):
+        raise SpecError("namedRanges must be a list.")
+    if not (MIN_NAMED_RANGES <= len(named) <= MAX_NAMED_RANGES):
+        raise SpecError(
+            "spec must have between %d and %d namedRanges (got %d)."
+            % (MIN_NAMED_RANGES, MAX_NAMED_RANGES, len(named))
+        )
+    for nri, nr in enumerate(named):
+        nwhere = "namedRange %d" % (nri + 1)
+        if not isinstance(nr, dict):
+            raise SpecError("%s must be an object." % nwhere)
+        name = nr.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise SpecError("%s: name must be a non-empty string." % nwhere)
+        nm = name.strip()
+        if (len(nm) > 255
+                or not re.match(r"^[A-Za-z_\\][A-Za-z0-9_.]*$", nm)
+                or re.match(r"^[A-Za-z]{1,3}[0-9]+$", nm)):
+            raise SpecError(
+                "%s: invalid defined name %r (start with a letter or underscore, "
+                "no spaces, and not a cell reference like A1)." % (nwhere, name)
+            )
+        ref = nr.get("ref")
+        if not isinstance(ref, str) or not ref.strip():
+            raise SpecError("%s: ref must be a non-empty string." % nwhere)
+
 
 # ---------------------------------------------------------------------------
 # Rendering helpers
@@ -258,6 +428,24 @@ def _coerce_date(value):
         except ValueError:
             pass
     return value
+
+
+def _resolve_fill_hex(color):
+    """Map a friendly colour name or 6-hex string to an ARGB hex, else None.
+
+    Accepts the named colours (red/green/yellow/orange/blue) and any raw
+    6-digit hex (e.g. "FFC7CE"). Returns an 8-digit ARGB string suitable for
+    PatternFill, or None if the input is not a recognised colour.
+    """
+    if not isinstance(color, str):
+        return None
+    key = color.strip().lower()
+    if key in CONDFMT_COLORS:
+        return "FF" + CONDFMT_COLORS[key]
+    raw = color.strip()
+    if _HEX6.match(raw):
+        return "FF" + raw.upper()
+    return None
 
 
 def _render_sheet(ws, sheet):
@@ -338,8 +526,20 @@ def _render_sheet(ws, sheet):
         ws.auto_filter.ref = "A1:%s%d" % (end_col, end_row)
 
     # --- Charts (skip entirely if there are no data rows) ---
+    # Charts must reference the DATA range only, so render them before the
+    # totals row is appended below the data.
     if rows:
         _render_charts(ws, sheet, columns, first_data_row, last_data_row)
+
+    # --- Conditional formats + data validations on the DATA range ---
+    # (Both apply to firstDataRow..lastDataRow; they skip cleanly with no rows.)
+    if rows:
+        _render_conditional_formats(ws, sheet, columns, first_data_row, last_data_row)
+    _render_data_validations(ws, sheet, columns, first_data_row, last_data_row, bool(rows))
+
+    # --- Totals row (appended below the data; excluded from filter + charts) ---
+    if rows and sheet.get("totalsRow"):
+        _render_totals_row(ws, columns, first_data_row, last_data_row)
 
 
 def _render_charts(ws, sheet, columns, first_data_row, last_data_row):
@@ -396,6 +596,167 @@ def _render_charts(ws, sheet, columns, first_data_row, last_data_row):
         ws.add_chart(chart, anchor)
 
 
+def _render_totals_row(ws, columns, first_data_row, last_data_row):
+    """Append one totals row below the data.
+
+    Each number/currency/percent/formula column gets a live
+    =SUM(<col><first>:<col><last>) over the DATA range with that column's
+    number format. The first text column (or column 1 if there is none) gets a
+    bold "Total" label. The whole row is bold with a thin top border.
+    """
+    total_row = last_data_row + 1
+    n_cols = len(columns)
+
+    # Pick the label column: first text column, else column 1.
+    label_col = 1
+    for ci, col in enumerate(columns, start=1):
+        if col.get("type") == "text":
+            label_col = ci
+            break
+
+    for ci, col in enumerate(columns, start=1):
+        ctype = col.get("type")
+        target = ws.cell(row=total_row, column=ci)
+        letter = get_column_letter(ci)
+
+        if ctype in SUMMABLE_TYPES:
+            target.value = "=SUM(%s%d:%s%d)" % (
+                letter, first_data_row, letter, last_data_row
+            )
+            # Match the column's number format (explicit overrides type).
+            explicit = col.get("format")
+            if isinstance(explicit, str) and explicit:
+                target.number_format = explicit
+            else:
+                fmt = TYPE_FORMATS.get(ctype)
+                if fmt:
+                    target.number_format = fmt
+        elif ci == label_col:
+            target.value = "Total"
+
+        # Bold + thin top border across the whole row.
+        target.font = TOTAL_FONT
+        target.border = TOTAL_TOP_BORDER
+
+
+def _render_conditional_formats(ws, sheet, columns, first_data_row, last_data_row):
+    """Apply real openpyxl conditional formatting to columns' data ranges."""
+    cond_fmts = sheet.get("conditionalFormats") or []
+    for cf in cond_fmts:
+        col = cf["column"]
+        letter = get_column_letter(col)
+        cell_range = "%s%d:%s%d" % (letter, first_data_row, letter, last_data_row)
+        rule_name = cf["rule"]
+
+        if rule_name in COMPARISON_RULES:
+            fill = PatternFill(
+                start_color=_resolve_fill_hex(cf.get("color")) or ("FF" + CONDFMT_COLORS["yellow"]),
+                end_color=_resolve_fill_hex(cf.get("color")) or ("FF" + CONDFMT_COLORS["yellow"]),
+                fill_type="solid",
+            )
+            value = cf.get("value")
+            if rule_name == "between":
+                lo, hi = value, cf.get("value2")
+                # Excel's "between" needs lo <= hi; swap reversed numeric bounds so
+                # the rule highlights rather than silently matching nothing.
+                if isinstance(lo, (int, float)) and isinstance(hi, (int, float)) and lo > hi:
+                    lo, hi = hi, lo
+                formula = [_condfmt_operand(lo), _condfmt_operand(hi)]
+            else:
+                formula = [_condfmt_operand(value)]
+            ws.conditional_formatting.add(
+                cell_range,
+                CellIsRule(operator=rule_name, formula=formula, fill=fill),
+            )
+
+        elif rule_name in ("top10", "bottom10"):
+            fill = PatternFill(
+                start_color=_resolve_fill_hex(cf.get("color")) or ("FF" + CONDFMT_COLORS["green"]),
+                end_color=_resolve_fill_hex(cf.get("color")) or ("FF" + CONDFMT_COLORS["green"]),
+                fill_type="solid",
+            )
+            dxf = DifferentialStyle(fill=fill)
+            rule = Rule(
+                type="top10",
+                rank=10,
+                percent=True,
+                bottom=(rule_name == "bottom10"),
+                dxf=dxf,
+            )
+            ws.conditional_formatting.add(cell_range, rule)
+
+        else:  # "colorScale"
+            ws.conditional_formatting.add(
+                cell_range,
+                ColorScaleRule(
+                    start_type="min", start_color=COLORSCALE_MIN,
+                    mid_type="percentile", mid_value=50, mid_color=COLORSCALE_MID,
+                    end_type="max", end_color=COLORSCALE_MAX,
+                ),
+            )
+
+
+def _condfmt_operand(value):
+    """Format a comparison operand for a CellIsRule formula.
+
+    Numbers pass through as their literal text; strings are wrapped in double
+    quotes so Excel compares against the literal text.
+    """
+    if isinstance(value, bool):
+        return '"%s"' % value
+    if isinstance(value, (int, float)):
+        return repr(value) if isinstance(value, float) else str(value)
+    return '"%s"' % str(value).replace('"', '""')
+
+
+def _render_data_validations(ws, sheet, columns, first_data_row, last_data_row, has_rows):
+    """Attach real list (dropdown) data validations to columns' data ranges."""
+    validations = sheet.get("dataValidations") or []
+    if not validations:
+        return
+    # With no data rows there is no range to attach to; skip cleanly.
+    if not has_rows:
+        return
+
+    for dv_spec in validations:
+        col = dv_spec["column"]
+        letter = get_column_letter(col)
+        cell_range = "%s%d:%s%d" % (letter, first_data_row, letter, last_data_row)
+
+        # formula1 is a quoted, comma-joined list. Commas are the list separator,
+        # so replace them with a space; double embedded quotes so a value containing
+        # a " cannot break out of the literal into a live formula. (The combined
+        # length is capped to Excel's 255-char list-source limit in _validate_spec.)
+        items = [str(v).replace(",", " ").replace('"', '""') for v in dv_spec["values"]]
+        joined = ",".join(items)
+        formula1 = '"%s"' % joined
+
+        dv = DataValidation(
+            type="list",
+            formula1=formula1,
+            allow_blank=True,
+            showDropDown=False,        # False => the dropdown arrow IS shown
+            showErrorMessage=True,
+            showInputMessage=True,
+            errorStyle="stop",
+            errorTitle="Invalid entry",
+            error="Pick a value from the list.",
+            promptTitle="Choose a value",
+            prompt="Select one of the allowed values.",
+        )
+        ws.add_data_validation(dv)
+        dv.add(cell_range)
+
+
+def _render_named_ranges(wb, spec):
+    """Register workbook-level defined names (openpyxl 3.1.5 API)."""
+    named = spec.get("namedRanges") or []
+    for nr in named:
+        name = nr["name"].strip()
+        ref = nr["ref"].strip()
+        wb.defined_names.add(DefinedName(name=name, attr_text=ref))
+
+
 def _slugify_filename(filename, spec):
     """Build a safe download filename: slug.xlsx."""
     candidate = None
@@ -426,6 +787,9 @@ def _build_workbook(spec):
             ws = wb.create_sheet()
         ws.title = _unique_title(sheet.get("name"), used_titles)
         _render_sheet(ws, sheet)
+
+    # Workbook-level defined names (must be added after sheets exist).
+    _render_named_ranges(wb, spec)
 
     buf = BytesIO()
     wb.save(buf)

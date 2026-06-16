@@ -155,6 +155,68 @@ def test_generate():
     check("chart align: series span == category span (dataStartRow=3)", val_rows == cat_rows)
     check("chart align: both span rows 3..6", val_rows == (3, 6))
 
+    # --- Advanced features: totals row, conditional format, validation, named range ---
+    adv = {
+        "title": "adv",
+        "namedRanges": [{"name": "TaxRate", "ref": "'S'!$B$1"}],
+        "sheets": [{
+            "name": "S",
+            "columns": [
+                {"header": "Item", "type": "text"},
+                {"header": "Amount", "type": "currency"},
+                {"header": "Status", "type": "text"},
+            ],
+            "rows": [["A", 600, "To Do"], ["B", 200, "Done"], ["C", 900, "In Progress"]],
+            "totalsRow": True,
+            "conditionalFormats": [{"column": 2, "rule": "greaterThan", "value": 500, "color": "red"}],
+            "dataValidations": [{"column": 3, "values": ["To Do", "In Progress", "Done"]}],
+        }],
+    }
+    gen._validate_spec(adv)
+    wbA = load_workbook(io.BytesIO(gen._build_workbook(adv)))
+    wsA = wbA["S"]
+    cellsA = [c for row in wsA.iter_rows() for c in row]
+    has_sum = any(c.data_type == "f" and "SUM" in str(c.value).upper() for c in cellsA)
+    has_total_label = any(str(c.value or "").strip().lower() == "total" for c in cellsA)
+    check("totals: a live =SUM formula is present", has_sum)
+    check("totals: a 'Total' label is present", has_total_label)
+    check("condfmt: a rule exists on the sheet", len(list(wsA.conditional_formatting)) > 0)
+    check("validation: a list validation exists", len(wsA.data_validations.dataValidation) > 0)
+    check("namedRange: a defined name is present", len(list(wbA.defined_names)) > 0)
+
+    def rejects_adv(label, spec):
+        try:
+            gen._validate_spec(spec)
+            check(label + " (should reject)", False)
+        except gen.SpecError:
+            check(label, True)
+
+    rejects_adv("reject: invalid condfmt rule", {"title": "t", "sheets": [{"name": "S",
+                "columns": [{"header": "a", "type": "number"}], "rows": [[1]],
+                "conditionalFormats": [{"column": 1, "rule": "wat", "value": 1}]}]})
+    rejects_adv("reject: condfmt column out of range", {"title": "t", "sheets": [{"name": "S",
+                "columns": [{"header": "a", "type": "number"}], "rows": [[1]],
+                "conditionalFormats": [{"column": 5, "rule": "greaterThan", "value": 1}]}]})
+    rejects_adv("reject: validation column out of range", {"title": "t", "sheets": [{"name": "S",
+                "columns": [{"header": "a", "type": "text"}], "rows": [["x"]],
+                "dataValidations": [{"column": 9, "values": ["a"]}]}]})
+    rejects_adv("reject: dropdown list over 255 chars", {"title": "t", "sheets": [{"name": "S",
+                "columns": [{"header": "a", "type": "text"}], "rows": [["x"]],
+                "dataValidations": [{"column": 1, "values": ["opt" + str(i) + "x" * 20 for i in range(15)]}]}]})
+    rejects_adv("reject: illegal named-range name (spaces)", {"title": "t",
+                "namedRanges": [{"name": "Bad Name", "ref": "'S'!$A$1"}],
+                "sheets": [{"name": "S", "columns": [{"header": "a", "type": "text"}], "rows": [["x"]]}]})
+
+    # dropdown list escapes embedded double-quotes (no formula break-out)
+    quoted = {"title": "q", "sheets": [{"name": "S",
+              "columns": [{"header": "Pick", "type": "text"}], "rows": [["x"], ["y"]],
+              "dataValidations": [{"column": 1, "values": ['Hi "Bob"', "Plain"]}]}]}
+    gen._validate_spec(quoted)
+    wbQ = load_workbook(io.BytesIO(gen._build_workbook(quoted)))
+    dvf = wbQ["S"].data_validations.dataValidation[0].formula1
+    check("validation: embedded quotes doubled (even parity, no breakout)",
+          '""' in dvf and dvf.count('"') % 2 == 0)
+
     # --- Validation rejections (expect SpecError -> 400) --------------------
     def rejects(label, spec):
         try:
@@ -309,8 +371,8 @@ def test_improve():
     check("shape: model is Fable 5 by default", str(seen.get("model", "")).startswith("claude-fable-5"))
     check("shape: adaptive thinking present", seen.get("thinking") == {"type": "adaptive"})
     check("shape: effort inside output_config", seen.get("output_config", {}).get("effort") == imp.EFFORT)
-    check("shape: json_schema format present",
-          seen.get("output_config", {}).get("format", {}).get("type") == "json_schema")
+    check("shape: no structured-output format sent (prompt-JSON envelope)",
+          "format" not in seen.get("output_config", {}))
     check("shape: no temperature/top_p/top_k", not ({"temperature", "top_p", "top_k"} & set(seen)))
 
     # max_tokens stop_reason -> friendly 500
@@ -443,6 +505,16 @@ def test_improve():
               if isinstance(cont5, list) else (cont5 or ""))
     check("baseSpec: empty-sheets spec still framed as an edit",
           "CURRENT SPREADSHEET to edit" in etext5)
+
+    # _extract_json robustness (prompt-JSON envelope parsing)
+    ej = imp._extract_json
+    check("extract: plain envelope", (ej('{"status":"ready","notes":"n"}') or {}).get("status") == "ready")
+    check("extract: code-fenced", (ej('```json\n{"status":"ready","notes":"n"}\n```') or {}).get("status") == "ready")
+    check("extract: stray leading brace + prose",
+          (ej('use the {row} token, then: {"status":"ready","notes":"n"}') or {}).get("status") == "ready")
+    check("extract: prefers the status envelope among two objects",
+          (ej('{"foo":1} then {"status":"needs_input","notes":"n"}') or {}).get("status") == "needs_input")
+    check("extract: pure garbage -> None", ej("no json here at all") is None)
 
 
 if __name__ == "__main__":

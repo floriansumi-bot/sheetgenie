@@ -11,6 +11,7 @@ source of truth. Keep this file aligned with them.
 
 import json
 import os
+import re
 import sys
 import traceback
 from http.server import BaseHTTPRequestHandler
@@ -19,7 +20,13 @@ import anthropic
 
 
 # ---------------------------------------------------------------------------
-# SpreadsheetSpec as a JSON Schema for Anthropic structured outputs.
+# SpreadsheetSpec as a JSON Schema (REFERENCE ONLY — not sent to the API).
+#
+# NOTE: the full schema below compiles to a grammar that exceeds Anthropic's
+# structured-output size limit ("compiled grammar is too large"), so it is no
+# longer passed as output_config.format. It is kept here as the canonical record
+# of the JSON shape; at runtime improve.py pins the envelope in SYSTEM_PROMPT
+# (see "OUTPUT FORMAT") and parses the reply defensively with _extract_json.
 #
 # Encodes the FULL SpreadsheetSpec from docs/SPEC.md §2. Structured outputs do
 # NOT support minLength/maxLength/minimum/maximum/multipleOf or recursive $refs,
@@ -62,6 +69,60 @@ _CHART_SCHEMA = {
     "required": ["type", "title", "categoriesColumn", "valueColumns"],
 }
 
+# Conditional-formatting rule on a column's data range (SPEC.md §2 CondFmt).
+# value/value2 may be string-or-number-or-null; comparison rules use value (+
+# value2 for "between"); top10/bottom10/colorScale omit them. color is a named
+# colour or a 6-hex string, or null to let the renderer choose.
+_CONDFMT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "column": {"type": "integer"},
+        "rule": {
+            "type": "string",
+            "enum": [
+                "greaterThan",
+                "greaterThanOrEqual",
+                "lessThan",
+                "lessThanOrEqual",
+                "equal",
+                "between",
+                "top10",
+                "bottom10",
+                "colorScale",
+            ],
+        },
+        "value": {"type": ["string", "number", "null"]},
+        "value2": {"type": ["string", "number", "null"]},
+        "color": {"type": ["string", "null"]},
+    },
+    "required": ["column", "rule"],
+}
+
+# Dropdown/list validation on a column's data range (SPEC.md §2 Validation).
+_VALIDATION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "column": {"type": "integer"},
+        "values": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["column", "values"],
+}
+
+# Workbook-level defined name (SPEC.md §2 NamedRange). Formula columns may
+# reference `name` instead of a literal range; `ref` is an Excel reference such
+# as "'Settings'!$B$1".
+_NAMED_RANGE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "name": {"type": "string"},
+        "ref": {"type": "string"},
+    },
+    "required": ["name", "ref"],
+}
+
 _SHEET_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -80,6 +141,10 @@ _SHEET_SCHEMA = {
         "freezeHeader": {"type": "boolean"},
         "autoFilter": {"type": "boolean"},
         "charts": {"type": "array", "items": _CHART_SCHEMA},
+        # Advanced features (all optional; see SPEC.md §2 "Advanced features").
+        "totalsRow": {"type": "boolean"},
+        "conditionalFormats": {"type": "array", "items": _CONDFMT_SCHEMA},
+        "dataValidations": {"type": "array", "items": _VALIDATION_SCHEMA},
     },
     "required": ["name", "columns"],
 }
@@ -90,6 +155,8 @@ _SPREADSHEET_SPEC_SCHEMA = {
     "properties": {
         "title": {"type": "string"},
         "sheets": {"type": "array", "items": _SHEET_SCHEMA},
+        # Optional workbook-level defined names.
+        "namedRanges": {"type": "array", "items": _NAMED_RANGE_SCHEMA},
     },
     "required": ["title", "sheets"],
 }
@@ -174,6 +241,9 @@ percent. Calendar dates -> date (use ISO yyyy-mm-dd strings in rows). Counts and
 quantities -> number. Labels/names/notes -> text.
 - width and format are optional; omit them unless a specific width or explicit \
 Excel number format is genuinely needed.
+- For a currency SYMBOL, set an explicit "format", e.g. "\\"CHF\\" #,##0.00" or \
+"#,##0.00 \\"CHF\\"" (or "$#,##0.00", "\\u20ac#,##0.00"). Use type "percent" for \
+percentages (store values as fractions, see below).
 
 FORMULA COLUMNS
 - For a calculated column, set type to "formula" and provide a "formula" that is \
@@ -182,6 +252,9 @@ row number, e.g. "=B{row}-C{row}" or "=B{row}*C{row}". Column letters refer to \
 the FINAL left-to-right column order.
 - In every row, the cell for a formula column MUST be null — the renderer fills \
 it from the formula. Never put a computed value there.
+- Formulas can be rich: cross-sheet refs like ='Q1'!B{row}, IF, VLOOKUP/XLOOKUP, \
+SUMIFS, absolute refs ($B$2), and named ranges. You KNOW how many rows you emit, \
+so you may write fixed ranges like =SUM($B$2:$B$13) or =VLOOKUP(A{row},$E$2:$F$20,2,FALSE).
 
 PERCENT VALUES
 - percent values are fractions, not whole numbers: 25% is 0.25, not 25. \
@@ -227,12 +300,34 @@ omit these (or use null) to let the renderer auto-place.
 columns, and value columns must point at numeric/currency/percent/formula \
 columns.
 
+ADVANCED FEATURES (all optional — use ONLY when the request calls for them)
+- totalsRow (sheet-level boolean): set true when the user wants a "total" or \
+"sum" row — it appends a live SUM row under the data for every numeric column.
+- conditionalFormats (sheet-level array): use when the user wants to \
+"highlight"/"colour" cells — e.g. the top/bottom values, anything over/under a \
+threshold, or a heatmap. Each: column (1-based), rule \
+(greaterThan, greaterThanOrEqual, lessThan, lessThanOrEqual, equal, between, \
+top10, bottom10, colorScale), value (the compared number/string; omit for \
+top10/bottom10/colorScale), value2 (second bound for "between" only), and \
+optional color (red, green, yellow, orange, blue, or a 6-hex like "FFC7CE").
+- dataValidations (sheet-level array): use when the user wants a "dropdown" or a \
+fixed "status"/category list. Each: column (1-based) and values (the allowed \
+list, e.g. ["To Do","In Progress","Done"]).
+- namedRanges (workbook-level array on spec): use when the user wants a "named \
+range" or a "named constant" (e.g. a tax rate). Each: name and ref (an Excel \
+reference like "'Settings'!$B$1"); formula columns may then reference name.
+
 HARD LIMITS (never exceed)
 - At most 8 sheets. At most 50 columns per sheet. At most 5000 rows per sheet. \
 At most 6 charts per sheet. At most 10 value columns per chart.
 
 Keep the spec minimal and explicit: the renderer does exactly what the spec \
-says and nothing more. Prefer clarity and correctness over cleverness."""
+says and nothing more. Prefer clarity and correctness over cleverness.
+
+OUTPUT FORMAT — respond with EXACTLY ONE JSON object and NOTHING else: no markdown, \
+no code fences, no text before or after. Shape: {"status": "ready" | "needs_input", \
+"notes": string, "improvedPrompt": string (ready only), "spec": <SpreadsheetSpec> \
+(ready only), "questions": [{"question": string, "hint": string}] (needs_input only)}."""
 
 
 # ---------------------------------------------------------------------------
@@ -348,6 +443,65 @@ def _build_file_blocks(files):
         else:
             raise _InputError("Unsupported attachment type.")
     return blocks
+
+
+def _balanced_objects(text):
+    """Yield each balanced top-level {...} substring, respecting string literals
+    and escapes (so braces inside strings don't confuse the scan)."""
+    objs = []
+    depth, start, in_str, esc = 0, -1, False, False
+    for k, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = k
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start != -1:
+                objs.append(text[start:k + 1])
+                start = -1
+    return objs
+
+
+def _extract_json(text):
+    """Parse the model's JSON envelope, tolerating a stray code fence, a stray
+    leading brace, or prose around it. Returns the envelope dict (preferring one
+    with a "status" field), or None if nothing parseable is found."""
+    if not isinstance(text, str):
+        return None
+    candidates = [text.strip()]
+    fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
+    if fenced:
+        candidates.append(fenced.group(1))
+    candidates.extend(_balanced_objects(text))
+    i, j = text.find("{"), text.rfind("}")
+    if i != -1 and j > i:
+        candidates.append(text[i:j + 1])
+
+    parsed = []
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(obj, dict):
+            parsed.append(obj)
+    if not parsed:
+        return None
+    for obj in parsed:
+        if "status" in obj:
+            return obj
+    return parsed[0]
 
 
 class handler(BaseHTTPRequestHandler):
@@ -478,22 +632,21 @@ class handler(BaseHTTPRequestHandler):
             resp = None
             unavailable = None
             for model in MODEL_CHAIN:
-                output_config = {
-                    "format": {"type": "json_schema", "schema": RESPONSE_SCHEMA}
+                # We deliberately do NOT use output_config.format (structured outputs):
+                # the full SpreadsheetSpec compiles to a grammar that exceeds the API's
+                # size limit ("compiled grammar is too large"). The system prompt pins
+                # the exact JSON envelope instead and we parse it defensively below.
+                kwargs = {
+                    "model": model,
+                    "max_tokens": MAX_TOKENS,
+                    "system": SYSTEM_PROMPT,
+                    "messages": [{"role": "user", "content": content}],
                 }
-                extra = {}
                 if _supports_thinking(model):
-                    extra["thinking"] = {"type": "adaptive"}
-                    output_config["effort"] = EFFORT
+                    kwargs["thinking"] = {"type": "adaptive"}
+                    kwargs["output_config"] = {"effort": EFFORT}
                 try:
-                    resp = client.messages.create(
-                        model=model,
-                        max_tokens=MAX_TOKENS,
-                        system=SYSTEM_PROMPT,
-                        messages=[{"role": "user", "content": content}],
-                        output_config=output_config,
-                        **extra,
-                    )
+                    resp = client.messages.create(**kwargs)
                     break
                 except (anthropic.NotFoundError, anthropic.PermissionDeniedError) as exc:
                     # This key can't use that model — try the next in the chain.
@@ -513,8 +666,8 @@ class handler(BaseHTTPRequestHandler):
                 )
                 return
 
-            # output_config.format guarantees a text block with valid JSON
-            # matching RESPONSE_SCHEMA, but we still parse defensively.
+            # The model returns one JSON object (per the OUTPUT FORMAT instruction).
+            # Parse it tolerantly (strip any stray code fence / surrounding prose).
             text = next((b.text for b in resp.content if b.type == "text"), None)
             if not text:
                 self._send_json(
@@ -524,9 +677,8 @@ class handler(BaseHTTPRequestHandler):
                 )
                 return
 
-            try:
-                result = json.loads(text)
-            except json.JSONDecodeError:
+            result = _extract_json(text)
+            if not isinstance(result, dict):
                 self._send_json(
                     500,
                     {"error": "The spreadsheet plan came back malformed. "

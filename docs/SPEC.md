@@ -130,7 +130,8 @@ exactly what the spec says and nothing more.
 ```jsonc
 SpreadsheetSpec = {
   "title": "string",                 // workbook title; default filename if none given
-  "sheets": [ Sheet, ... ]           // 1..8 sheets
+  "sheets": [ Sheet, ... ],          // 1..8 sheets
+  "namedRanges": [ NamedRange, ... ] // optional, default [] — workbook-level defined names
 }
 
 Sheet = {
@@ -140,7 +141,25 @@ Sheet = {
   "rows": [ Row, ... ],              // optional; [] means an empty, labelled template
   "freezeHeader": true,              // optional, default true — freezes the header row
   "autoFilter": true,                // optional, default true — adds filter dropdowns
-  "charts": [ Chart, ... ]           // optional, default []
+  "charts": [ Chart, ... ],          // optional, default []
+  "totalsRow": false,                // optional — append a live SUM totals row (see below)
+  "conditionalFormats": [ CondFmt, ... ],  // optional — colour rules on a column's data
+  "dataValidations": [ Validation, ... ]   // optional — dropdown lists on a column's data
+}
+
+NamedRange = { "name": "TaxRate", "ref": "'Settings'!$B$1" }  // formulas may use the name
+
+CondFmt = {
+  "column": 2,                       // 1-based column the rule applies to (its data rows)
+  "rule": "greaterThan|greaterThanOrEqual|lessThan|lessThanOrEqual|equal|between|top10|bottom10|colorScale",
+  "value": 500,                      // compared-against number/string (omit for top10/bottom10/colorScale)
+  "value2": null,                    // optional second bound for "between"
+  "color": "red"                     // red|green|yellow|orange|blue, or a 6-hex like "FFC7CE"
+}
+
+Validation = {
+  "column": 4,                       // 1-based column to attach a dropdown to (its data rows)
+  "values": ["To Do", "In Progress", "Done"]   // allowed list; entries outside it are rejected
 }
 
 Row = [ cell, cell, ... ]            // aligned to `columns` by index; pad/truncate to len(columns)
@@ -181,10 +200,34 @@ token `{row}` for the current 1-based row number. The generator substitutes `{ro
 per data row. Example: `"=B{row}*C{row}"` on row 5 becomes `=B5*C5`.
 Column letters refer to the final left-to-right column order.
 
+### Advanced features (optional)
+- **`totalsRow`** — when true, the generator appends one row below the data that
+  `=SUM`s every numeric / currency / percent / formula column over the data range,
+  labels the first text column "Total", and bolds the row with a top border. The SUMs
+  are live formulas. From another sheet, reference a sheet's total with a formula
+  column, e.g. `"=SUM('Q1'!B2:B100)"`.
+- **`conditionalFormats`** — real Excel conditional-formatting rules on the column's
+  data range (never one-off shading). `top10`/`bottom10` highlight the top/bottom 10%;
+  `colorScale` applies a 3-colour scale; comparison rules use `value` (+ `value2` for
+  `between`).
+- **`dataValidations`** — a real dropdown/list validation on the column's data range;
+  entries outside `values` are rejected by Excel.
+- **`namedRanges`** — workbook-level defined names; formula columns may reference the
+  name instead of a literal range.
+
+### Number formats & formulas (guidance for the model)
+- For a currency symbol use an explicit `format`, e.g. `"\"CHF\" #,##0.00"` or
+  `"#,##0.00 \"CHF\""`. Use `type:"percent"` for percentages (store fractions).
+- Formula columns may use cross-sheet refs (`='Q1'!B{row}`), `IF`, `VLOOKUP`/`XLOOKUP`,
+  `SUMIFS`, absolute refs (`$B$2`), and named ranges. `{row}` expands per data row, and
+  the model knows how many rows it emits, so it can write ranges like `$B$2:$B$13`.
+
 ### Hard limits (generator validates; reject with 400 if exceeded)
 - `sheets`: 1–8 · `columns` per sheet: 1–50 · `rows` per sheet: 0–5000
 - `charts` per sheet: 0–6 · chart `valueColumns`: 1–10
-- All column indices in a chart must be in range for that sheet.
+- `conditionalFormats` per sheet: 0–20 · `dataValidations` per sheet: 0–20 ·
+  validation `values`: 1–200 · `namedRanges`: 0–50
+- All column indices (charts, conditional formats, validations) must be in range.
 
 ### Worked example
 Prompt: *"monthly budget tracker with categories, budgeted vs actual, and a bar chart"*

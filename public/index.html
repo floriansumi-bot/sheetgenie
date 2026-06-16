@@ -111,7 +111,17 @@
         <h2 class="library-title">My spreadsheets</h2>
         <button id="libraryClose" class="lib-close" type="button" aria-label="Close library">✕</button>
       </div>
+      <div class="lib-toolbar">
+        <label class="sr-only" for="libSearch">Search your spreadsheets by title</label>
+        <input id="libSearch" class="lib-search" type="search" placeholder="Search by title…" autocomplete="off" enterkeyhint="search">
+        <div class="lib-toolbar-actions">
+          <button id="libExport" class="lib-act" type="button">Export library</button>
+          <button id="libImportBtn" class="lib-act" type="button">Import</button>
+          <input id="libImportInput" class="sr-only" type="file" accept="application/json,.json">
+        </div>
+      </div>
       <ul id="libList" class="lib-list"></ul>
+      <p id="libNoMatch" class="lib-empty" hidden>No spreadsheets match your search.</p>
       <p id="libEmpty" class="lib-empty" hidden>No saved spreadsheets yet — generate one, then tap “Save to library”.</p>
     </section>
 

@@ -52,6 +52,11 @@
   const libraryClose = $('libraryClose');
   const libList = $('libList');
   const libEmpty = $('libEmpty');
+  const libNoMatch = $('libNoMatch');
+  const libSearch = $('libSearch');
+  const libExportBtn = $('libExport');
+  const libImportBtn = $('libImportBtn');
+  const libImportInput = $('libImportInput');
   const editBanner = $('editBanner');
   const editTitle = $('editTitle');
   const newSheetBtn = $('newSheetBtn');
@@ -815,8 +820,17 @@
   async function saveCurrentToLibrary(announce) {
     if (!currentSpec) return;
     try {
-      if (!currentLibId) currentLibId = genId();
-      await libPut({ id: currentLibId, title: currentSpec.title || 'Spreadsheet', spec: currentSpec, updatedAt: Date.now() });
+      // Preserve a user-assigned (renamed) title: only fall back to the spec title
+      // for a brand-new record, so auto-saves (download / edit) never clobber a rename.
+      let title = currentSpec.title || 'Spreadsheet';
+      if (currentLibId) {
+        let existing = null;
+        try { existing = await libGet(currentLibId); } catch (_) {}
+        if (existing && existing.title) title = existing.title;
+      } else {
+        currentLibId = genId();
+      }
+      await libPut({ id: currentLibId, title: title, spec: currentSpec, updatedAt: Date.now() });
       await refreshLibrary();
       if (announce) showOk('Saved to your library.');
     } catch (_) {
@@ -824,36 +838,123 @@
     }
   }
 
+  // The full, sorted record set is held in memory so the search box can filter it
+  // live without re-querying IndexedDB on every keystroke.
+  let libItems = [];
+
   async function refreshLibrary() {
     let items = [];
     try { items = await libAll(); } catch (_) { items = []; }
     items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    libItems = items;
     libCount.textContent = String(items.length);
     libCount.hidden = items.length === 0;
-    renderLibList(items);
+    renderLibList();
   }
 
-  function renderLibList(items) {
+  // Render the (optionally filtered) list. Empty-library and no-match get distinct
+  // messages so a search that hides everything doesn't look like an empty library.
+  function renderLibList() {
+    // Don't tear down the list while a rename input is open (replaceChildren would
+    // remove it and fire its blur->commit). Skip the rebuild until rename finishes.
+    if (libList.querySelector('.lib-rename')) return;
+    const q = (libSearch && libSearch.value ? libSearch.value : '').trim().toLowerCase();
+    const shown = q
+      ? libItems.filter((rec) => String(rec.title || '').toLowerCase().includes(q))
+      : libItems;
+
     libList.replaceChildren();
-    libEmpty.hidden = items.length > 0;
-    items.forEach((rec) => {
+    libEmpty.hidden = libItems.length > 0;
+    libNoMatch.hidden = !(libItems.length > 0 && shown.length === 0);
+
+    shown.forEach((rec) => {
+      const name = el('span', { class: 'lib-name', text: rec.title || 'Spreadsheet' });
       const info = el('div', { class: 'lib-info' }, [
-        el('span', { class: 'lib-name', text: rec.title || 'Spreadsheet' }),
+        name,
         el('span', { class: 'lib-meta', text: libMeta(rec) }),
       ]);
       const openB = el('button', { class: 'lib-act', attrs: { type: 'button' }, text: 'Open' });
       openB.addEventListener('click', () => openFromLibrary(rec.id));
       const dlB = el('button', { class: 'lib-act', attrs: { type: 'button' }, text: 'Download' });
       dlB.addEventListener('click', () => generateAndDownload(rec.spec, dlB));
+      const renameB = el('button', { class: 'lib-act', attrs: { type: 'button', 'aria-label': 'Rename ' + (rec.title || 'spreadsheet') }, text: 'Rename' });
+      renameB.addEventListener('click', () => beginRename(rec, info, name, renameB));
+      const dupB = el('button', { class: 'lib-act', attrs: { type: 'button', 'aria-label': 'Duplicate ' + (rec.title || 'spreadsheet') }, text: 'Duplicate' });
+      dupB.addEventListener('click', () => duplicateRecord(rec, dupB));
       const delB = el('button', { class: 'lib-act lib-del', attrs: { type: 'button', 'aria-label': 'Delete ' + (rec.title || 'spreadsheet') }, text: 'Delete' });
       delB.addEventListener('click', async () => {
         try { await libDel(rec.id); } catch (_) {}
         if (currentLibId === rec.id) currentLibId = null;
         refreshLibrary();
       });
-      const acts = el('div', { class: 'lib-acts' }, [openB, dlB, delB]);
+      const acts = el('div', { class: 'lib-acts' }, [openB, dlB, renameB, dupB, delB]);
       libList.appendChild(el('li', { class: 'lib-item' }, [info, acts]));
     });
+  }
+
+  // RENAME — swap the title label for an inline input; commit on Enter/blur, cancel
+  // on Escape. Persists via libPut (title + fresh updatedAt) and keeps state in sync.
+  function beginRename(rec, info, nameEl, triggerBtn) {
+    if (info.querySelector('.lib-rename')) return;  // already editing this row
+    const input = el('input', {
+      class: 'lib-rename',
+      attrs: { type: 'text', 'aria-label': 'New title', value: '' },
+    });
+    input.value = rec.title || 'Spreadsheet';
+    nameEl.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let done = false;
+    const cancel = () => {
+      if (done) return;
+      done = true;
+      input.replaceWith(nameEl);
+      if (triggerBtn && triggerBtn.isConnected) triggerBtn.focus();
+    };
+    const commit = async () => {
+      if (done) return;
+      const next = input.value.trim();
+      if (!next || next === (rec.title || 'Spreadsheet')) { cancel(); return; }
+      done = true;
+      // Remove the editing input BEFORE refreshing so renderLibList's
+      // "rename in progress" guard doesn't skip this rebuild. (That guard is
+      // only meant to protect against a SEARCH re-render, which keeps the input
+      // mounted, from tearing down an in-progress rename.)
+      if (input.isConnected) input.replaceWith(nameEl);
+      try {
+        await libPut({ id: rec.id, title: next, spec: rec.spec, updatedAt: Date.now() });
+        showOk('Renamed.');
+      } catch (_) {
+        showError('Could not rename on this device.');
+      }
+      await refreshLibrary();
+    };
+
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); commit(); }
+      else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+    });
+    input.addEventListener('blur', commit);
+  }
+
+  // DUPLICATE — write a copy under a new id with " (copy)" appended to the title.
+  async function duplicateRecord(rec, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      await libPut({
+        id: genId(),
+        title: ((rec.title || 'Spreadsheet') + ' (copy)').slice(0, 200),
+        spec: rec.spec,
+        updatedAt: Date.now(),
+      });
+      await refreshLibrary();
+      showOk('Duplicated.');
+    } catch (_) {
+      showError('Could not duplicate on this device.');
+    } finally {
+      if (btn && btn.isConnected) btn.disabled = false;
+    }
   }
 
   function libMeta(rec) {
@@ -923,6 +1024,99 @@
   libraryClose.addEventListener('click', () => setLibraryOpen(false));
   saveLibBtn.addEventListener('click', () => saveCurrentToLibrary(true));
   newSheetBtn.addEventListener('click', newSpreadsheet);
+
+  /* ---------- SEARCH — live, case-insensitive title filter ---------- */
+  if (libSearch) {
+    libSearch.addEventListener('input', renderLibList);
+    // Native clear (the "x" on type=search) fires 'search'.
+    libSearch.addEventListener('search', renderLibList);
+  }
+
+  /* ---------- EXPORT — download a JSON backup of every record ---------- */
+  if (libExportBtn) libExportBtn.addEventListener('click', exportLibrary);
+  async function exportLibrary() {
+    let items = [];
+    try { items = await libAll(); } catch (_) { items = []; }
+    if (!items.length) { showError('Your library is empty — nothing to export yet.'); return; }
+    const backup = {
+      app: 'sheetgenie',
+      kind: 'library-backup',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      records: items.map((r) => ({
+        id: r.id, title: r.title, spec: r.spec, updatedAt: r.updatedAt,
+      })),
+    };
+    let json;
+    try { json = JSON.stringify(backup, null, 2); }
+    catch (_) { showError('Could not prepare the backup file.'); return; }
+    const blob = new Blob([json], { type: 'application/json' });
+    const stamp = new Date().toISOString().slice(0, 10);
+    triggerDownload(blob, 'sheetgenie-library-' + stamp + '.json');
+    showOk('Exported ' + items.length + (items.length === 1 ? ' spreadsheet.' : ' spreadsheets.'));
+  }
+
+  /* ---------- IMPORT — merge records from a JSON backup ---------- */
+  if (libImportBtn) libImportBtn.addEventListener('click', () => libImportInput && libImportInput.click());
+  if (libImportInput) libImportInput.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    libImportInput.value = '';  // allow re-importing the same file
+    if (file) importLibrary(file);
+  });
+
+  // A record imports only if it has a usable spec (object with a sheets array). We
+  // assign a fresh id when the incoming id is missing or already present, so an
+  // import never silently overwrites an existing entry.
+  function isImportableSpec(spec) {
+    return spec && typeof spec === 'object' && Array.isArray(spec.sheets);
+  }
+
+  async function importLibrary(file) {
+    if (file && file.size > 20 * 1024 * 1024) {
+      showError('That backup file is too large to import.');
+      return;
+    }
+    let text;
+    try { text = await readAsText(file); }
+    catch (_) { showError('Could not read that file.'); return; }
+
+    let parsed;
+    try { parsed = JSON.parse(text); }
+    catch (_) { showError('That file is not valid JSON.'); return; }
+
+    // Accept either our backup envelope ({records:[...]}) or a bare array of records.
+    const records = Array.isArray(parsed) ? parsed
+      : (parsed && Array.isArray(parsed.records)) ? parsed.records
+      : null;
+    if (!records) { showError('That does not look like a SheetGenie library backup.'); return; }
+
+    let existingIds;
+    try { existingIds = new Set((await libAll()).map((r) => r.id)); }
+    catch (_) { existingIds = new Set(); }
+
+    let added = 0;
+    let skipped = 0;
+    for (const rec of records) {
+      if (!rec || !isImportableSpec(rec.spec)) { skipped++; continue; }
+      let id = (typeof rec.id === 'string' && rec.id) ? rec.id : genId();
+      if (existingIds.has(id)) id = genId();  // never clobber an existing record
+      existingIds.add(id);
+      const title = (typeof rec.title === 'string' && rec.title.trim())
+        ? rec.title.trim().slice(0, 200) : 'Spreadsheet';
+      const updatedAt = (typeof rec.updatedAt === 'number' && isFinite(rec.updatedAt))
+        ? rec.updatedAt : Date.now();
+      try { await libPut({ id, title, spec: rec.spec, updatedAt }); added++; }
+      catch (_) { skipped++; }
+    }
+
+    await refreshLibrary();
+    if (added) {
+      showOk('Imported ' + added + (added === 1 ? ' spreadsheet' : ' spreadsheets')
+        + (skipped ? ' (' + skipped + ' skipped).' : '.'));
+    } else {
+      showError('No spreadsheets could be imported from that file.');
+    }
+  }
 
   refreshLibrary();
 
