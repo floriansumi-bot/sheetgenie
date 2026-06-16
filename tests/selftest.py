@@ -508,6 +508,21 @@ def test_improve():
     check("baseSpec: empty-sheets spec still framed as an edit",
           "CURRENT SPREADSHEET to edit" in etext5)
 
+    # locale is folded into the user message (for local-currency recommendations)
+    seenL = {}
+
+    def capL(kw, n, R, ns):
+        seenL.update(kw)
+        return R(json.dumps(CANNED))
+
+    imp.anthropic = _fake_anthropic(capL)
+    _drive(imp, json.dumps({"prompt": "a price list", "locale": "de-CH"}).encode(),
+           env={"ANTHROPIC_API_KEY": "sk-ant-test"})
+    contL = (seenL.get("messages") or [{}])[0].get("content")
+    ltext = (next((b.get("text", "") for b in contL if isinstance(b, dict) and b.get("type") == "text"), "")
+             if isinstance(contL, list) else (contL or ""))
+    check("locale: folded into the user message", "User locale: de-CH" in ltext)
+
     # _extract_json robustness (prompt-JSON envelope parsing)
     ej = imp._extract_json
     check("extract: plain envelope", (ej('{"status":"ready","notes":"n"}') or {}).get("status") == "ready")

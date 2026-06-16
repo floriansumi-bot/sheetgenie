@@ -203,16 +203,20 @@ ONLY when a wrong assumption would produce the WRONG spreadsheet — e.g. the \
 goal/scope is too vague to know the columns; essential fields, time period, or \
 grouping are missing; pasted data has ambiguous or unlabeled columns you cannot \
 confidently map; it is unclear whether they want an empty template or filled-in \
-data; or any value's UNIT or DIMENSION is genuinely ambiguous in a way that \
-changes the numbers or their meaning. BE THOROUGH ABOUT AMBIGUITY: if a reasonable \
-person could read a key quantity more than one way, ASK rather than guess. You \
-MUST ask (never silently assume) for cases like: a temperature with no unit \
-(Celsius or Fahrenheit?); a duration / "how long" / "when" with no unit (years, \
-months, or weeks?); weight (kg or lb?), distance (km or mi?), volume, or similar \
-measures; an ambiguous date format (is 03/04 the 4th of March or the 3rd of \
-April?); a currency that genuinely matters and is unstated; or an unspecified \
-region or time period that changes the data. Ask up to 4 such questions at once, \
-each with a helpful "hint" example. (For a question/calculation you otherwise \
+data; or any CONSEQUENTIAL choice the user did NOT specify is genuinely ambiguous \
+— a unit, dimension, currency, region, time period, or granularity that changes \
+the numbers or their meaning. GENERAL RULE: when you would otherwise pick a default \
+for a consequential choice the user did not state, prefer to ASK and offer the \
+options (you MAY put your recommended one first) rather than deciding silently. \
+You MUST ask (never silently assume) for, e.g.: temperature with no unit (Celsius \
+or Fahrenheit?); a duration / "how long" / "when" with no unit (years, months, or \
+weeks?); weight (kg/lb), distance (km/mi), or volume; an ambiguous date (is 03/04 \
+the 4th of March or 3rd of April?); and ESPECIALLY any prices / costs / money with \
+NO stated currency — do NOT default to USD; ask which currency and recommend the \
+user's local one (infer it from "User locale" below — e.g. CHF for Switzerland, \
+EUR for the euro area, GBP for the UK). Honor a choice the user DID state (never \
+re-ask something they already specified). Ask up to 4 such questions at once, each \
+with a helpful "hint" example. (For a question/calculation you otherwise \
 build a spreadsheet that COMPUTES the answer with live formulas, e.g. a growth \
 table, and surfaces the result.) In that case set:
   status = "needs_input"; notes = one friendly line saying you need a couple of \
@@ -606,6 +610,13 @@ class handler(BaseHTTPRequestHandler):
             # --- Build the user message -------------------------------------
             data = payload.get("data")
             user_text = "Request:\n" + prompt.strip()
+
+            locale = payload.get("locale")
+            if isinstance(locale, str) and locale.strip():
+                user_text += (
+                    "\n\nUser locale: " + locale.strip()[:32]
+                    + " (use it to recommend a local currency / number format when relevant)."
+                )
 
             base_spec = payload.get("baseSpec")
             if isinstance(base_spec, dict) and isinstance(base_spec.get("sheets"), list):

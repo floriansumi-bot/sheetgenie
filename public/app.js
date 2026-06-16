@@ -514,6 +514,7 @@
       baseSpec: pendingBaseSpec || null,
       files: pendingFiles.length ? pendingFiles : null,
       clarifications: clarifications || null,
+      locale: (navigator.language || ''),
     };
 
     // Pre-flight size guard: baseSpec + data + attachments must fit the serverless

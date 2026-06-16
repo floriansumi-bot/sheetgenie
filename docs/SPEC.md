@@ -32,6 +32,7 @@ This is the only endpoint that calls the Anthropic API.
   "hasData": true,
   "data": "string|null — raw pasted tabular text (CSV/TSV/lines), optional",
   "baseSpec": { "...": "an existing SpreadsheetSpec to EDIT (optional)" },
+  "locale": "string|null — e.g. \"de-CH\"; lets the model recommend a local currency / number format",
   "files": [
     {
       "type": "image | pdf",
