@@ -259,6 +259,9 @@ def _fake_anthropic(behavior):
     ns = types.SimpleNamespace()
     ns.NotFoundError = type("NotFoundError", (Exception,), {})
     ns.PermissionDeniedError = type("PermissionDeniedError", (Exception,), {})
+    ns.RateLimitError = type("RateLimitError", (Exception,), {})
+    ns.BadRequestError = type("BadRequestError", (Exception,), {})
+    ns.AuthenticationError = type("AuthenticationError", (Exception,), {})
 
     class _Block:
         def __init__(self, text):
@@ -522,6 +525,24 @@ def test_improve():
     ltext = (next((b.get("text", "") for b in contL if isinstance(b, dict) and b.get("type") == "text"), "")
              if isinstance(contL, list) else (contL or ""))
     check("locale: folded into the user message", "User locale: de-CH" in ltext)
+
+    # out-of-credit -> graceful 503 (not a scary generic error)
+    def raise_credit(kw, n, R, ns):
+        raise ns.BadRequestError("Your credit balance is too low to access the Anthropic API")
+
+    imp.anthropic = _fake_anthropic(raise_credit)
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode(),
+                               env={"ANTHROPIC_API_KEY": "sk-ant-test"})
+    check("credit: graceful 503", status == 503 and "out of credit" in (parsed or {}).get("error", "").lower())
+
+    # rate limit -> graceful 503
+    def raise_rl(kw, n, R, ns):
+        raise ns.RateLimitError("rate limited")
+
+    imp.anthropic = _fake_anthropic(raise_rl)
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode(),
+                               env={"ANTHROPIC_API_KEY": "sk-ant-test"})
+    check("rate_limit: graceful 503", status == 503 and "usage limit" in (parsed or {}).get("error", "").lower())
 
     # _extract_json robustness (prompt-JSON envelope parsing)
     ej = imp._extract_json

@@ -750,6 +750,30 @@ class handler(BaseHTTPRequestHandler):
 
             self._send_json(200, result)
 
+        except anthropic.RateLimitError:
+            traceback.print_exc(file=sys.stderr)
+            self._send_json(
+                503,
+                {"error": "The AI is over its usage limit right now. "
+                          "Please try again in a few minutes."},
+            )
+        except (anthropic.BadRequestError, anthropic.PermissionDeniedError,
+                anthropic.AuthenticationError) as exc:
+            traceback.print_exc(file=sys.stderr)
+            msg = str(getattr(exc, "message", "") or exc).lower()
+            if (isinstance(exc, anthropic.AuthenticationError)
+                    or "credit" in msg or "billing" in msg or "quota" in msg):
+                self._send_json(
+                    503,
+                    {"error": "The AI is temporarily unavailable (it may be out of credit "
+                              "for now). Please try again later — your work isn't lost."},
+                )
+            else:
+                self._send_json(
+                    500,
+                    {"error": "Something went wrong generating your spreadsheet plan. "
+                              "Please try again."},
+                )
         except Exception:  # noqa: BLE001 — sanitize all failures for the client
             # Log the full error server-side (Vercel captures stderr) but never
             # leak the API key, raw exception text, or a stack trace to the client.
