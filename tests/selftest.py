@@ -374,6 +374,8 @@ def test_improve():
     check("shape: no structured-output format sent (prompt-JSON envelope)",
           "format" not in seen.get("output_config", {}))
     check("shape: no temperature/top_p/top_k", not ({"temperature", "top_p", "top_k"} & set(seen)))
+    check("shape: web_search tool enabled",
+          isinstance(seen.get("tools"), list) and seen["tools"][0].get("type") == "web_search_20250305")
 
     # max_tokens stop_reason -> friendly 500
     imp.anthropic = _fake_anthropic(lambda kw, n, R, ns: R(json.dumps(CANNED), stop_reason="max_tokens"))

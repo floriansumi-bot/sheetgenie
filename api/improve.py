@@ -203,13 +203,18 @@ ONLY when a wrong assumption would produce the WRONG spreadsheet — e.g. the \
 goal/scope is too vague to know the columns; essential fields, time period, or \
 grouping are missing; pasted data has ambiguous or unlabeled columns you cannot \
 confidently map; it is unclear whether they want an empty template or filled-in \
-data; or the UNIT or GRANULARITY of a key result is genuinely ambiguous. \
-In particular, if the request asks "how long", "when", or for a duration / number \
-of periods and does NOT state the unit, you MUST ask whether they want the answer \
-in years, months, or weeks before building — treat this as a REQUIRED \
-clarification, not optional, even though you could compute it. (For a \
-question/calculation you otherwise build a spreadsheet that COMPUTES the answer \
-with live formulas, e.g. a growth table, and surfaces the result.) In that case set:
+data; or any value's UNIT or DIMENSION is genuinely ambiguous in a way that \
+changes the numbers or their meaning. BE THOROUGH ABOUT AMBIGUITY: if a reasonable \
+person could read a key quantity more than one way, ASK rather than guess. You \
+MUST ask (never silently assume) for cases like: a temperature with no unit \
+(Celsius or Fahrenheit?); a duration / "how long" / "when" with no unit (years, \
+months, or weeks?); weight (kg or lb?), distance (km or mi?), volume, or similar \
+measures; an ambiguous date format (is 03/04 the 4th of March or the 3rd of \
+April?); a currency that genuinely matters and is unstated; or an unspecified \
+region or time period that changes the data. Ask up to 4 such questions at once, \
+each with a helpful "hint" example. (For a question/calculation you otherwise \
+build a spreadsheet that COMPUTES the answer with live formulas, e.g. a growth \
+table, and surfaces the result.) In that case set:
   status = "needs_input"; notes = one friendly line saying you need a couple of \
 details; questions = 1 to 4 SHORT, plain-language questions, each answerable in a \
 few words, each with a helpful "hint" example. Do NOT include a spec.
@@ -219,6 +224,14 @@ formatting trivia.
 IMPORTANT: if the user has ALREADY answered questions (they appear below under \
 "Answers to your questions"), do NOT ask again — make reasonable assumptions and \
 BUILD with status = "ready".
+
+LIVE DATA — you can search the web. If the request needs CURRENT real-world values \
+(stock / crypto prices, exchange or interest rates, weather, recent statistics, or \
+anything phrased as "current / latest / today / now"), use web search and put the \
+REAL fetched numbers into the spreadsheet; add a short note in "notes" stating the \
+figure(s), their date, and the source. NEVER invent a live figure — if you cannot \
+verify it, say so in "notes". Do NOT search for ordinary template or sample-data \
+requests.
 
 STEP 2 — WHEN YOU CAN BUILD, set status = "ready" and return exactly these three:
 
@@ -391,6 +404,17 @@ MAX_FILES = 6
 MAX_FILE_B64 = 3_700_000          # per-file base64 length (~2.8 MB)
 MAX_FILES_B64_TOTAL = 3_700_000   # combined base64 length across all attachments
 _IMAGE_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+
+# Live web search (Anthropic server tool): lets the model pull CURRENT real-world
+# data (prices, rates, weather, stats) into the spreadsheet. Costs ~$10/1000
+# searches plus the tokens for the results; capped per call. Toggle via WEB_SEARCH.
+WEB_SEARCH_ENABLED = (os.environ.get("WEB_SEARCH") or "on").strip().lower() not in (
+    "off", "0", "false", "no",
+)
+try:
+    WEB_SEARCH_MAX = int(os.environ.get("WEB_SEARCH_MAX") or "5")
+except (TypeError, ValueError):
+    WEB_SEARCH_MAX = 5
 
 _CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
@@ -648,6 +672,12 @@ class handler(BaseHTTPRequestHandler):
                     "system": SYSTEM_PROMPT,
                     "messages": [{"role": "user", "content": content}],
                 }
+                if WEB_SEARCH_ENABLED:
+                    kwargs["tools"] = [{
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": WEB_SEARCH_MAX,
+                    }]
                 if _supports_thinking(model):
                     kwargs["thinking"] = {"type": "adaptive"}
                     kwargs["output_config"] = {"effort": EFFORT}
@@ -674,7 +704,11 @@ class handler(BaseHTTPRequestHandler):
 
             # The model returns one JSON object (per the OUTPUT FORMAT instruction).
             # Parse it tolerantly (strip any stray code fence / surrounding prose).
-            text = next((b.text for b in resp.content if b.type == "text"), None)
+            # With web search the reply has tool blocks too; the JSON envelope is in
+            # the text block(s). Join them all and let _extract_json find the object.
+            text_parts = [b.text for b in resp.content
+                          if getattr(b, "type", "") == "text" and getattr(b, "text", "")]
+            text = "\n".join(text_parts) if text_parts else None
             if not text:
                 self._send_json(
                     500,
