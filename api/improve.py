@@ -202,8 +202,14 @@ is clear enough to build a CORRECT, useful spreadsheet. Ask for clarification \
 ONLY when a wrong assumption would produce the WRONG spreadsheet — e.g. the \
 goal/scope is too vague to know the columns; essential fields, time period, or \
 grouping are missing; pasted data has ambiguous or unlabeled columns you cannot \
-confidently map; or it is unclear whether they want an empty template or \
-filled-in data. In that case set:
+confidently map; it is unclear whether they want an empty template or filled-in \
+data; or the UNIT or GRANULARITY of a key result is genuinely ambiguous. \
+In particular, if the request asks "how long", "when", or for a duration / number \
+of periods and does NOT state the unit, you MUST ask whether they want the answer \
+in years, months, or weeks before building — treat this as a REQUIRED \
+clarification, not optional, even though you could compute it. (For a \
+question/calculation you otherwise build a spreadsheet that COMPUTES the answer \
+with live formulas, e.g. a growth table, and surfaces the result.) In that case set:
   status = "needs_input"; notes = one friendly line saying you need a couple of \
 details; questions = 1 to 4 SHORT, plain-language questions, each answerable in a \
 few words, each with a helpful "hint" example. Do NOT include a spec.

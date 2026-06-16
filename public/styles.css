@@ -256,6 +256,16 @@ body {
 }
 .improved-card .improved-text { margin: 0; font-size: 1.08rem; font-weight: 600; }
 .improved-card .notes { margin: 10px 0 0; color: var(--text-dim); font-size: 0.95rem; }
+.improved-edit {
+  width: 100%; resize: vertical; min-height: 64px; font: inherit; font-size: 1.02rem;
+  font-weight: 600; color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px;
+  line-height: 1.5; transition: border-color var(--t), box-shadow var(--t);
+}
+.improved-edit:focus {
+  outline: none; border-color: var(--accent-1); box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25);
+}
+.improved-regen { margin-top: 10px; flex: 0 1 auto; min-width: 190px; }
 
 .sheet-card {
   background: var(--surface); border: 1px solid var(--border);

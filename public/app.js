@@ -547,12 +547,24 @@
   function renderResults(payload) {
     resultsEl.replaceChildren();
 
-    // Improved prompt + notes (AI results), or just a note (loaded library files).
+    // Improved prompt — editable, with a Regenerate button — plus notes. (Loaded
+    // library files have no improvedPrompt, so they show just the note.)
     if (payload.improvedPrompt) {
       const improvedCard = el('div', { class: 'improved-card' });
-      improvedCard.appendChild(el('p', { class: 'eyebrow', text: 'Improved prompt' }));
-      improvedCard.appendChild(el('p', { class: 'improved-text', text: payload.improvedPrompt }));
+      improvedCard.appendChild(el('p', { class: 'eyebrow', text: 'Improved prompt — tweak it, then regenerate' }));
+      const ta = el('textarea', { class: 'improved-edit', attrs: { rows: '3', 'aria-label': 'Improved prompt (editable)' } });
+      ta.value = payload.improvedPrompt;
+      improvedCard.appendChild(ta);
       if (payload.notes) improvedCard.appendChild(el('p', { class: 'notes', text: payload.notes }));
+      const regenBtn = el('button', { class: 'btn btn-secondary improved-regen', attrs: { type: 'button' }, text: '↻ Regenerate from this' });
+      regenBtn.addEventListener('click', () => {
+        const refined = ta.value.trim();
+        if (!refined) { showError('The improved prompt is empty — type what you want.'); return; }
+        pendingPrompt = refined;
+        pendingBaseSpec = null;   // a refined full prompt -> a fresh spec (keeps any data/files added)
+        runImprove(null);
+      });
+      improvedCard.appendChild(regenBtn);
       resultsEl.appendChild(improvedCard);
     } else if (payload.notes) {
       const noteCard = el('div', { class: 'improved-card' });
@@ -564,9 +576,9 @@
     const sheets = Array.isArray(payload.spec && payload.spec.sheets) ? payload.spec.sheets : [];
     sheets.forEach((sheet) => resultsEl.appendChild(renderSheetCard(sheet)));
 
-    // Edit affordance — enter edit mode on the current spec.
+    // Keep refining the finished spreadsheet with another prompt and/or new data.
     const editRow = el('div', { class: 'results-actions' });
-    const editBtn = el('button', { class: 'btn btn-secondary', attrs: { type: 'button' }, text: '✏️ Edit / add data' });
+    const editBtn = el('button', { class: 'btn btn-secondary', attrs: { type: 'button' }, text: '✏️ Edit with another prompt or data' });
     editBtn.addEventListener('click', () => enterEditMode(currentSpec, currentSpec && currentSpec.title));
     editRow.appendChild(editBtn);
     resultsEl.appendChild(editRow);
