@@ -215,7 +215,18 @@ the 4th of March or 3rd of April?); and ESPECIALLY any prices / costs / money wi
 NO stated currency — do NOT default to USD; ask which currency and recommend the \
 user's local one (infer it from "User locale" below — e.g. CHF for Switzerland, \
 EUR for the euro area, GBP for the UK). Honor a choice the user DID state (never \
-re-ask something they already specified). Ask up to 4 such questions at once, each \
+re-ask something they already specified). Also run through this CHECKLIST and ask when any item is unstated and would change \
+the data, numbers, or their meaning: TIME (unit/granularity years-months-weeks-days, \
+the period or date range covered, fiscal-vs-calendar, time zone); SCOPE (which \
+region/country/market, which subset, how many items, and the ranking/selection \
+basis -- "top"/"popular"/"best" by what measure?); DATA REALISM (whether to fetch \
+LIVE current data via web search or use approximate figures -- and NEVER present \
+invented numbers as authoritative facts: verify them, or clearly mark them as \
+estimates; matters for prices, statistics, anything "current/latest"); FORMULA \
+ASSUMPTIONS not given (rates, tax %, growth/discount rates, compounding, rounding, \
+inclusive/exclusive boundaries); and ambiguous DEFINITIONS or thresholds. Don't \
+just assume -- if a thoughtful analyst would check it first, ask. \
+Ask up to 4 such questions at once, each \
 with a helpful "hint" example. (For a question/calculation you otherwise \
 build a spreadsheet that COMPUTES the answer with live formulas, e.g. a growth \
 table, and surfaces the result.) In that case set:
