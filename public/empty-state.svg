@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 180" width="240" height="180" role="img" aria-label="An empty spreadsheet waiting to be filled">
+  <defs>
+    <linearGradient id="es-accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#6366f1"/>
+    </linearGradient>
+    <linearGradient id="es-soft" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8b5cf6" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#6366f1" stop-opacity="0.02"/>
+    </linearGradient>
+  </defs>
+
+  <!-- soft halo so the art reads on both dark and light backgrounds -->
+  <ellipse cx="120" cy="96" rx="96" ry="62" fill="url(#es-soft)"/>
+
+  <!-- tilted spreadsheet card; uses currentColor for theme-adaptive strokes -->
+  <g transform="rotate(-6 120 92)" color="currentColor">
+    <rect x="62" y="36" width="116" height="118" rx="12"
+          fill="none" stroke="currentColor" stroke-width="3" opacity="0.5"/>
+    <!-- header row -->
+    <rect x="70" y="44" width="100" height="20" rx="6" fill="url(#es-accent)" opacity="0.9"/>
+    <!-- column dividers -->
+    <line x1="103" y1="64" x2="103" y2="146" stroke="currentColor" stroke-width="2.5" opacity="0.32"/>
+    <line x1="137" y1="64" x2="137" y2="146" stroke="currentColor" stroke-width="2.5" opacity="0.32"/>
+    <!-- row dividers -->
+    <line x1="70" y1="92"  x2="170" y2="92"  stroke="currentColor" stroke-width="2.5" opacity="0.32"/>
+    <line x1="70" y1="119" x2="170" y2="119" stroke="currentColor" stroke-width="2.5" opacity="0.32"/>
+  </g>
+
+  <!-- primary sparkle, brand gradient -->
+  <g transform="translate(158 96)">
+    <path d="M22 0 C25 14 30 19 44 22 C30 25 25 30 22 44 C19 30 14 25 0 22 C14 19 19 14 22 0 Z"
+          fill="url(#es-accent)"/>
+  </g>
+  <!-- small accent sparkle -->
+  <g transform="translate(62 118)">
+    <path d="M11 0 C12.5 7 15 9.5 22 11 C15 12.5 12.5 15 11 22 C9.5 15 7 12.5 0 11 C7 9.5 9.5 7 11 0 Z"
+          fill="#a78bfa" opacity="0.85"/>
+  </g>
+</svg>

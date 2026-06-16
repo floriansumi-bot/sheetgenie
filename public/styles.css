@@ -40,8 +40,10 @@
     --border: #e4e1ec;
     --text: #1d1b29;
     --text-dim: #5b5870;
-    --text-faint: #908ca3;
+    --text-faint: #6e6a80;
     --accent-text: #6d28d9;
+    --danger: #b42318;
+    --ok: #067647;
     --shadow: 0 12px 32px -16px rgba(60, 40, 110, 0.28);
     --shadow-sm: 0 2px 8px -3px rgba(60, 40, 110, 0.2);
     color-scheme: light;
@@ -57,14 +59,29 @@
 }
 :root[data-theme="light"] {
   --bg: #f6f5f2; --bg-grid: rgba(99,102,241,0.06); --surface: #ffffff; --surface-2: #f1eff5;
-  --border: #e4e1ec; --text: #1d1b29; --text-dim: #5b5870; --text-faint: #908ca3;
-  --accent-text: #6d28d9; --shadow: 0 12px 32px -16px rgba(60,40,110,0.28);
+  --border: #e4e1ec; --text: #1d1b29; --text-dim: #5b5870; --text-faint: #6e6a80;
+  --accent-text: #6d28d9; --danger: #b42318; --ok: #067647;
+  --shadow: 0 12px 32px -16px rgba(60,40,110,0.28);
   --shadow-sm: 0 2px 8px -3px rgba(60,40,110,0.2); color-scheme: light;
 }
 
 * { box-sizing: border-box; }
 
 html, body { margin: 0; padding: 0; }
+
+/* ---------- focus ring ----------
+   A single, consistent keyboard-focus indicator. :focus-visible keeps it for
+   keyboard/AT users without showing a ring on mouse taps. The fields that
+   already paint their own focus glow opt out below. */
+:focus-visible {
+  outline: 2px solid var(--accent-1);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.prompt:focus-visible, .data-input:focus-visible, .improved-edit:focus-visible,
+.q-input:focus-visible, .lib-search:focus-visible, .lib-rename:focus-visible {
+  outline: none;
+}
 
 body {
   background-color: var(--bg);
@@ -126,13 +143,37 @@ body {
   background: linear-gradient(100deg, var(--accent-1), var(--accent-2));
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-.tagline { margin: 0; color: var(--text-dim); font-size: 1.02rem; max-width: 46ch; }
+.tagline { margin: 0; color: var(--text-dim); font-size: 1.02rem; max-width: 52ch; }
+
+/* hero value points */
+.hero-points {
+  list-style: none; margin: 16px 0 0; padding: 0;
+  display: flex; flex-wrap: wrap; gap: 8px 18px;
+}
+.hero-points li {
+  display: inline-flex; align-items: center; gap: 8px;
+  color: var(--text-dim); font-size: 0.92rem;
+}
+.hero-ic {
+  flex: none; width: 20px; height: 20px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 0.72rem; font-weight: 800; color: #fff;
+  background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
+}
+
+/* shared eyebrow label (hero / cards) */
+.eyebrow {
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent-text);
+}
 
 /* ---------- cards ---------- */
 .card {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow);
 }
+.card-eyebrow { margin: 0 0 4px; }
+.card-title { margin: 0 0 14px; font-size: 1.2rem; font-weight: 800; letter-spacing: -0.015em; }
 
 /* ---------- capture ---------- */
 .prompt-row { position: relative; }
@@ -168,6 +209,7 @@ body {
   100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); }
 }
 .mic-hint { margin: 8px 2px 0; font-size: 0.82rem; color: var(--text-faint); }
+.prompt-hint { margin: 10px 2px 0; font-size: 0.82rem; color: var(--text-faint); }
 
 /* recording indicator (live waveform + pulsing dot) */
 .rec-indicator { display: flex; align-items: center; gap: 10px; margin: 10px 2px 0; }
@@ -186,9 +228,9 @@ body {
 /* ---------- data section ---------- */
 .data-toggle {
   appearance: none; background: none; border: none; cursor: pointer;
-  margin-top: 14px; padding: 6px 2px; color: var(--text-dim);
+  margin-top: 14px; padding: 8px 4px; min-height: 44px; color: var(--text-dim);
   font: inherit; font-size: 0.95rem; display: inline-flex; align-items: center; gap: 8px;
-  transition: color var(--t);
+  border-radius: 8px; transition: color var(--t);
 }
 .data-toggle:hover { color: var(--text); }
 .data-toggle .chev { transition: transform var(--t); display: inline-block; }
@@ -229,7 +271,9 @@ body {
   color: #fff; background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
   box-shadow: var(--shadow-sm);
 }
-.btn-primary:not(:disabled):hover { box-shadow: 0 8px 22px -8px rgba(99, 102, 241, 0.7); }
+.btn-primary:not(:disabled):hover {
+  box-shadow: 0 10px 26px -8px rgba(99, 102, 241, 0.7); transform: translateY(-1px);
+}
 
 .btn-secondary {
   color: var(--text); background: var(--surface-2); border-color: var(--border);
@@ -251,13 +295,37 @@ body {
 .toast {
   position: fixed; left: 16px; right: 16px; bottom: max(16px, env(safe-area-inset-bottom));
   max-width: 728px; margin: 0 auto; z-index: 50;
-  padding: 12px 14px; border-radius: var(--radius-sm);
+  padding: 12px 16px; border-radius: var(--radius-sm); font-weight: 600;
   background: var(--danger-bg); border: 1px solid rgba(248, 113, 113, 0.4);
   color: var(--danger); font-size: 0.95rem; box-shadow: var(--shadow);
+  animation: toast-in 200ms ease both;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* ---------- results ---------- */
 .results { margin-top: 22px; display: grid; gap: 16px; }
+/* Grid items default to min-width:auto and would stretch to the widest content
+   (a wide preview table), widening the column and overflowing the page. Let them
+   shrink so the table scrolls inside .table-scroll instead. */
+.results > * { min-width: 0; }
+.results[aria-busy="true"] { opacity: 0.7; }
+
+/* empty state — shown until the first preview replaces it */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: 6px; padding: 28px 18px 32px;
+  background: var(--surface); border: 1px dashed var(--border);
+  border-radius: var(--radius); color: var(--text-dim);
+}
+.empty-art {
+  width: min(240px, 70%); height: auto; margin-bottom: 6px;
+  color: var(--text-dim);
+}
+.empty-title { margin: 0; font-size: 1.05rem; font-weight: 700; color: var(--text); }
+.empty-sub { margin: 0; max-width: 42ch; font-size: 0.92rem; }
 
 .improved-card {
   background: var(--surface); border: 1px solid var(--border);
@@ -379,7 +447,9 @@ table.preview .more-row td {
 }
 .attach-remove {
   appearance: none; cursor: pointer; border: none; background: none;
-  color: var(--text-faint); font-size: 1rem; line-height: 1; padding: 6px; border-radius: 6px;
+  color: var(--text-faint); font-size: 1rem; line-height: 1; border-radius: 8px;
+  width: 40px; height: 40px; margin: -4px -6px -4px 0;
+  display: inline-flex; align-items: center; justify-content: center;
   flex: none; transition: color var(--t), background var(--t);
 }
 .attach-remove:hover { color: var(--danger); background: var(--danger-bg); }
@@ -430,9 +500,12 @@ table.preview .more-row td {
 .library-title { margin: 0; font-size: 1.15rem; font-weight: 800; letter-spacing: -0.01em; }
 .lib-close {
   appearance: none; cursor: pointer; border: none; background: none; color: var(--text-faint);
-  font-size: 1.1rem; line-height: 1; padding: 6px; border-radius: 6px;
+  font-size: 1.1rem; line-height: 1; border-radius: 8px;
+  width: 44px; height: 44px; margin: -6px -8px -6px 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: color var(--t), background var(--t);
 }
-.lib-close:hover { color: var(--text); }
+.lib-close:hover { color: var(--text); background: var(--surface-2); }
 /* library toolbar: search + export/import */
 .lib-toolbar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px;
@@ -472,7 +545,8 @@ table.preview .more-row td {
 .lib-act {
   appearance: none; cursor: pointer; font: inherit; font-size: 0.84rem; font-weight: 600;
   color: var(--text); background: var(--surface); border: 1px solid var(--border);
-  border-radius: 8px; padding: 6px 11px; min-height: 38px;
+  border-radius: 8px; padding: 8px 12px; min-height: 44px;
+  display: inline-flex; align-items: center; justify-content: center;
   transition: border-color var(--t), color var(--t), background var(--t);
 }
 .lib-act:hover { border-color: var(--accent-1); }

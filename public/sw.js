@@ -3,7 +3,7 @@
  * - NETWORK-ONLY for any /api/ request: API responses are never cached.
  * Bump CACHE_VERSION whenever a shell asset changes.
  */
-const CACHE_VERSION = 'sheetgenie-v8';
+const CACHE_VERSION = 'sheetgenie-v10';
 
 const SHELL = [
   './',
