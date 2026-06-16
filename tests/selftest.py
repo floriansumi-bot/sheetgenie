@@ -185,6 +185,7 @@ def test_generate():
 # improve.py  (mocked Anthropic client)
 # ===========================================================================
 CANNED = {
+    "status": "ready",
     "improvedPrompt": "A monthly budget tracker with category, budgeted, actual, variance.",
     "notes": "Made you a budget tracker.",
     "spec": {"title": "Budget", "sheets": [{"name": "Budget",
@@ -338,6 +339,30 @@ def test_improve():
     status, parsed, _ = _drive(imp, b"{}", content_length=imp.MAX_BODY_BYTES + 1,
                                env={"ANTHROPIC_API_KEY": "sk-ant-test"})
     check("oversized: 413", status == 413)
+
+    # clarifications are folded into the user message sent to the model
+    seen2 = {}
+
+    def cap2(kw, n, R, ns):
+        seen2.update(kw)
+        return R(json.dumps(CANNED))
+
+    imp.anthropic = _fake_anthropic(cap2)
+    _drive(imp, json.dumps({"prompt": "sales report",
+                            "clarifications": [{"question": "Period?", "answer": "Q1 2026"}]}).encode(),
+           env={"ANTHROPIC_API_KEY": "sk-ant-test"})
+    umsg = (seen2.get("messages") or [{}])[0].get("content", "")
+    check("clarifications: folded into the user message",
+          "Answers to your questions" in umsg and "Q1 2026" in umsg)
+
+    # a needs_input response passes through unchanged (frontend handles it)
+    NEEDS = {"status": "needs_input", "notes": "need a couple details",
+             "questions": [{"question": "What period?", "hint": "e.g. 2026"}]}
+    imp.anthropic = _fake_anthropic(lambda kw, n, R, ns: R(json.dumps(NEEDS)))
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "a report"}).encode(),
+                               env={"ANTHROPIC_API_KEY": "sk-ant-test"})
+    check("needs_input: 200 passthrough with status", status == 200 and parsed.get("status") == "needs_input")
+    check("needs_input: questions present", isinstance(parsed.get("questions"), list) and len(parsed["questions"]) == 1)
 
 
 if __name__ == "__main__":

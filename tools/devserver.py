@@ -37,6 +37,7 @@ def _load(name, rel):
 gen = _load("generate_mod", os.path.join("api", "generate.py"))
 
 CANNED = {
+    "status": "ready",
     "improvedPrompt": "A monthly budget tracker with a Category column, Budgeted "
                       "and Actual currency columns, and a Variance formula column "
                       "(Budgeted minus Actual), plus a bar chart comparing budgeted "
@@ -70,6 +71,15 @@ CANNED = {
     },
 }
 
+NEEDS_INPUT = {
+    "status": "needs_input",
+    "notes": "A couple of details will help me build the right report.",
+    "questions": [
+        {"question": "What time period should it cover?", "hint": "e.g. Jan-Dec 2026, or last 12 months"},
+        {"question": "Which columns do you want?", "hint": "e.g. Date, Product, Region, Revenue"},
+    ],
+}
+
 
 class H(BaseHTTPRequestHandler):
     def _json(self, status, obj):
@@ -86,7 +96,18 @@ class H(BaseHTTPRequestHandler):
         path = self.path.split("?")[0].rstrip("/")
 
         if path == "/api/improve":
-            self._json(200, CANNED)
+            try:
+                payload = json.loads(raw or b"{}")
+            except Exception:  # noqa: BLE001
+                payload = {}
+            prompt = str(payload.get("prompt") or "").lower()
+            clar = payload.get("clarifications")
+            # Local-test policy: a vague "report" prompt with no answers yet -> ask
+            # clarifying questions; otherwise (or once answered) -> ready.
+            if not clar and "report" in prompt and "budget" not in prompt:
+                self._json(200, NEEDS_INPUT)
+            else:
+                self._json(200, CANNED)
             return
 
         if path == "/api/generate":

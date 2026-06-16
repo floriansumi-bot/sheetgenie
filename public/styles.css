@@ -302,6 +302,33 @@ table.preview .more-row td {
   .actions .btn { flex: 0 1 auto; }
 }
 
+/* ---------- clarifying questions ---------- */
+.questions-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 4px solid var(--accent-2); border-radius: var(--radius);
+  padding: 16px 18px; box-shadow: var(--shadow);
+}
+.questions-card .eyebrow {
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent-text); margin: 0 0 6px;
+}
+.questions-card .notes { margin: 0 0 14px; color: var(--text-dim); font-size: 0.95rem; }
+.q-form { display: grid; gap: 14px; }
+.q-item { display: grid; gap: 6px; }
+.q-label { font-size: 0.95rem; font-weight: 600; color: var(--text); }
+.q-input {
+  width: 100%; font: inherit; font-size: 1rem; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 11px 12px; min-height: 46px;
+  transition: border-color var(--t), box-shadow var(--t);
+}
+.q-input:focus {
+  outline: none; border-color: var(--accent-1);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25);
+}
+.q-actions { margin-top: 16px; display: flex; gap: 12px; }
+.q-actions .btn { flex: 0 1 auto; min-width: 160px; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
 }

@@ -26,9 +26,12 @@ Works on Android, iPhone, PC, and Mac from one codebase, installable as a PWA.
 ```
 
 1. **Capture** — user types or dictates a prompt; may paste tabular data.
-2. **Improve** (`/api/improve`) — Anthropic API returns `{ improvedPrompt, notes, spec }`.
-   The `spec` is a [`SpreadsheetSpec`](SPEC.md). The user sees the improved prompt and a
-   preview, and can regenerate or tweak before committing.
+2. **Improve** (`/api/improve`) — the Anthropic API returns one of two things: a few
+   short **clarifying questions** (when the request is genuinely ambiguous), or, when it
+   has enough to go on, `{ status: "ready", improvedPrompt, notes, spec }`. If it asks,
+   the user answers inline and the app re-calls `/api/improve` with those answers folded
+   in; the model then builds (it won't ask twice). The `spec` is a
+   [`SpreadsheetSpec`](SPEC.md), shown as a preview before download.
 3. **Generate** (`/api/generate`) — openpyxl renders the spec to `.xlsx`, deterministic
    and free (no AI, no network). Streams back as a download.
 

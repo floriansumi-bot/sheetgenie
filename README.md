@@ -11,7 +11,8 @@ PC, and Mac**.
 
 ## How it works
 1. **Capture** — type or dictate your request (and optionally paste your data).
-2. **Improve** — an AI step rewrites it into a precise blueprint you can review.
+2. **Improve** — an AI step rewrites it into a precise blueprint you can review. If your
+   request is ambiguous, it first asks a couple of quick questions, then builds.
 3. **Generate** — the blueprint is rendered into a real `.xlsx` and downloaded.
 
 The expensive AI step runs once; the file build is free, instant, and reproducible.

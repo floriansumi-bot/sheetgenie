@@ -218,7 +218,11 @@
      ============================================================ */
   improveBtn.addEventListener('click', onImprove);
 
-  async function onImprove() {
+  // Remember the original request so a clarification round can re-send it.
+  let pendingPrompt = '';
+  let pendingData = null;
+
+  function onImprove() {
     if (busy) return;
     const prompt = promptEl.value.trim();
     if (!prompt) {
@@ -226,14 +230,25 @@
       promptEl.focus();
       return;
     }
+    pendingPrompt = prompt;
+    pendingData = hasData() ? dataInput.value : null;
+    runImprove(null);
+  }
 
+  // Calls /api/improve. `clarifications` is null on the first pass, or an array of
+  // {question, answer} once the user has answered the model's questions.
+  async function runImprove(clarifications) {
+    if (busy) return;
     clearError();
     setBusy(true);
+    currentSpec = null;                 // a new request invalidates any prior spec
+    downloadBtn.disabled = true;
 
     const body = {
-      prompt,
-      hasData: hasData(),
-      data: hasData() ? dataInput.value : null,
+      prompt: pendingPrompt,
+      hasData: !!(pendingData && pendingData.trim()),
+      data: pendingData,
+      clarifications: clarifications || null,
     };
 
     try {
@@ -247,21 +262,12 @@
       try { payload = await res.json(); } catch (_) { payload = null; }
 
       if (!res.ok || !payload || payload.error) {
-        const msg = (payload && payload.error) ? payload.error
-          : 'The improve step failed (' + res.status + '). Please try again.';
-        showError(msg);
+        showError((payload && payload.error) ? payload.error
+          : 'The improve step failed (' + res.status + '). Please try again.');
         return;
       }
 
-      if (!payload.spec || typeof payload.spec !== 'object' || !Array.isArray(payload.spec.sheets)) {
-        showError('The assistant returned an unexpected result. Please try again.');
-        return;
-      }
-
-      currentSpec = payload.spec;
-      downloadBtn.disabled = false;
-      renderResults(payload);
-      resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      handleImproveResult(payload);
     } catch (err) {
       if (err && err.name === 'AbortError') {
         showError('That took too long. Try a simpler request or less data, then retry.');
@@ -271,6 +277,73 @@
     } finally {
       setBusy(false);
     }
+  }
+
+  // Branch on the two-mode response (docs/SPEC.md §1): clarifying questions, or a
+  // ready-to-build spec.
+  function handleImproveResult(payload) {
+    if (payload.status === 'needs_input' &&
+        Array.isArray(payload.questions) && payload.questions.length) {
+      renderQuestions(payload);
+      resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    // "ready" (or a legacy response without status): expect a spec.
+    if (!payload.spec || typeof payload.spec !== 'object' || !Array.isArray(payload.spec.sheets)) {
+      showError('The assistant returned an unexpected result. Please try again.');
+      return;
+    }
+    currentSpec = payload.spec;
+    downloadBtn.disabled = false;
+    renderResults(payload);
+    resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Render the model's clarifying questions as a short form; Continue re-runs
+  // improve with the answers folded in.
+  function renderQuestions(payload) {
+    resultsEl.replaceChildren();
+
+    const card = el('div', { class: 'questions-card' });
+    card.appendChild(el('p', { class: 'eyebrow', text: 'A couple of quick questions' }));
+    card.appendChild(el('p', {
+      class: 'notes',
+      text: payload.notes || 'A few details will help me build the right spreadsheet.',
+    }));
+
+    const form = el('div', { class: 'q-form' });
+    const fields = [];
+    payload.questions.slice(0, 4).forEach((q, i) => {
+      const qText = (q && q.question) ? q.question : ('Question ' + (i + 1));
+      const id = 'q-' + i;
+      const input = el('input', {
+        class: 'q-input',
+        attrs: { id: id, type: 'text', placeholder: (q && q.hint) ? q.hint : 'Your answer (optional)' },
+      });
+      fields.push({ question: qText, input });
+      form.appendChild(el('div', { class: 'q-item' }, [
+        el('label', { class: 'q-label', text: qText, attrs: { for: id } }),
+        input,
+      ]));
+    });
+    card.appendChild(form);
+
+    const cont = el('button', { class: 'btn btn-primary', attrs: { type: 'button' }, text: 'Continue' });
+    cont.addEventListener('click', async () => {
+      const clar = fields.map((f) => ({ question: f.question, answer: (f.input.value || '').trim() }));
+      const label = cont.textContent;
+      cont.disabled = true;
+      cont.textContent = 'Working...';
+      await runImprove(clar);
+      if (cont.isConnected) { cont.disabled = false; cont.textContent = label; }
+    });
+    fields.forEach((f) => f.input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); cont.click(); }
+    }));
+
+    card.appendChild(el('div', { class: 'q-actions' }, [cont]));
+    resultsEl.appendChild(card);
+    if (fields[0]) fields[0].input.focus();
   }
 
   /* ============================================================

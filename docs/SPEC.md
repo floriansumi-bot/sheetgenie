@@ -30,18 +30,43 @@ This is the only endpoint that calls the Anthropic API.
 {
   "prompt": "string  — the raw user prompt (typed or dictated)",
   "hasData": true,
-  "data": "string|null — raw pasted tabular text (CSV/TSV/lines), optional"
+  "data": "string|null — raw pasted tabular text (CSV/TSV/lines), optional",
+  "clarifications": [
+    { "question": "string — a question we previously asked", "answer": "string — the user's answer" }
+  ]
 }
 ```
+`clarifications` is optional / `null` on the first call. If the previous response was
+`status: "needs_input"`, the client re-calls with the same `prompt`/`data` plus the
+user's answers here.
 
-**Success (200)**
+**Success (200)** — one of two shapes, discriminated by `status`:
+
+*Ready to build:*
 ```json
 {
-  "improvedPrompt": "string — a clear, specific restatement of the workbook to build",
+  "status": "ready",
   "notes": "string — one or two friendly sentences for the user (plain language)",
+  "improvedPrompt": "string — a clear, specific restatement of the workbook to build",
   "spec": { "...": "a valid SpreadsheetSpec (see §2)" }
 }
 ```
+
+*Needs clarification (the prompt/data is genuinely ambiguous):*
+```json
+{
+  "status": "needs_input",
+  "notes": "string — one friendly line explaining why you're asking",
+  "questions": [
+    { "question": "string — short, plain-language", "hint": "string|null — example/placeholder" }
+  ]
+}
+```
+Rules: ask **only** when a wrong assumption would produce the wrong spreadsheet
+(unclear scope, missing key fields, ambiguous data mapping, template-vs-filled
+unclear). **Max 4 questions**, each answerable in a few words. Prefer sensible
+defaults over asking. Once the client sends `clarifications`, the response **must**
+be `status: "ready"` — never re-ask.
 
 **Error (4xx/5xx)**
 ```json

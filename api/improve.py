@@ -94,15 +94,32 @@ _SPREADSHEET_SPEC_SCHEMA = {
     "required": ["title", "sheets"],
 }
 
+_QUESTION_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "question": {"type": "string"},
+        "hint": {"type": ["string", "null"]},
+    },
+    "required": ["question"],
+}
+
+# Two-mode response (see docs/SPEC.md §1): status "ready" carries improvedPrompt +
+# spec; status "needs_input" carries questions. Only status + notes are always
+# required; spec/improvedPrompt/questions are conditional, so they are optional
+# here and the system prompt governs which appear. spec is nullable so the model
+# can omit it cleanly when asking questions.
 RESPONSE_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "improvedPrompt": {"type": "string"},
+        "status": {"type": "string", "enum": ["ready", "needs_input"]},
         "notes": {"type": "string"},
-        "spec": _SPREADSHEET_SPEC_SCHEMA,
+        "improvedPrompt": {"type": ["string", "null"]},
+        "spec": {"anyOf": [_SPREADSHEET_SPEC_SCHEMA, {"type": "null"}]},
+        "questions": {"type": "array", "items": _QUESTION_SCHEMA},
     },
-    "required": ["improvedPrompt", "notes", "spec"],
+    "required": ["status", "notes"],
 }
 
 
@@ -110,7 +127,27 @@ SYSTEM_PROMPT = """\
 You are an expert spreadsheet architect. The user gives you a rough request \
 (and sometimes pasted tabular data). You design a complete, well-structured \
 workbook blueprint that another component renders deterministically into a real \
-.xlsx file. You must return exactly three things, as structured JSON:
+.xlsx file. Return structured JSON.
+
+STEP 1 — DECIDE IF YOU CAN BUILD THE RIGHT THING.
+Judge whether the request (plus any pasted data and any answers already provided) \
+is clear enough to build a CORRECT, useful spreadsheet. Ask for clarification \
+ONLY when a wrong assumption would produce the WRONG spreadsheet — e.g. the \
+goal/scope is too vague to know the columns; essential fields, time period, or \
+grouping are missing; pasted data has ambiguous or unlabeled columns you cannot \
+confidently map; or it is unclear whether they want an empty template or \
+filled-in data. In that case set:
+  status = "needs_input"; notes = one friendly line saying you need a couple of \
+details; questions = 1 to 4 SHORT, plain-language questions, each answerable in a \
+few words, each with a helpful "hint" example. Do NOT include a spec.
+PREFER sensible defaults over asking — most clear requests need NO questions, so \
+just build. Never ask more than 4 questions, and never ask about cosmetic \
+formatting trivia.
+IMPORTANT: if the user has ALREADY answered questions (they appear below under \
+"Answers to your questions"), do NOT ask again — make reasonable assumptions and \
+BUILD with status = "ready".
+
+STEP 2 — WHEN YOU CAN BUILD, set status = "ready" and return exactly these three:
 
 1. improvedPrompt — a clear, specific restatement of the workbook to build. \
 Name the sheets, the columns, the kinds of data, and any calculations or charts. \
@@ -311,6 +348,24 @@ class handler(BaseHTTPRequestHandler):
                 user_text += (
                     "\n\nUser-provided data to fill in:\n" + data.strip()
                 )
+
+            # Fold in answers to any clarifying questions we asked previously, so
+            # the model now has enough to build (and must not ask again).
+            clar = payload.get("clarifications")
+            if isinstance(clar, list) and clar:
+                qa_lines = []
+                for item in clar:
+                    if not isinstance(item, dict):
+                        continue
+                    q = str(item.get("question", "")).strip()
+                    a = str(item.get("answer", "")).strip()
+                    if q or a:
+                        qa_lines.append("Q: " + q + "\nA: " + (a or "(no answer given)"))
+                if qa_lines:
+                    user_text += (
+                        "\n\nAnswers to your questions (do NOT ask again — build the "
+                        "spreadsheet now):\n" + "\n".join(qa_lines)
+                    )
 
             # --- Call the Anthropic API -------------------------------------
             # The SDK resolves ANTHROPIC_API_KEY from the environment. We never
