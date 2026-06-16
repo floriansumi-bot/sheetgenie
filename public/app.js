@@ -260,6 +260,8 @@
      ============================================================ */
   (function initVoice() {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const recIndicator = $('recIndicator');
+    const recCanvas = $('recCanvas');
     if (!SR) {
       micBtn.hidden = true;
       micHint.hidden = false;
@@ -267,66 +269,153 @@
     }
 
     let recog = null;
-    let recording = false;
-    let baseText = '';   // text already in the textarea when recording began
+    let recording = false;     // user intent: the mic is on
+    let manualStop = false;    // user tapped stop (don't auto-restart)
+    let restarts = 0;
+    let baseText = '';
+    let sep = '';
+    // Web Audio visualizer (the "you're being recorded" cue + permission gate).
+    let audioStream = null, audioCtx = null, analyser = null, rafId = 0;
 
-    function setRecording(on) {
-      recording = on;
+    function showRecUI(on) {
+      if (recIndicator) recIndicator.hidden = !on;
       micBtn.setAttribute('aria-pressed', String(on));
       micBtn.setAttribute('aria-label', on ? 'Stop dictation' : 'Dictate with your voice');
     }
 
-    function stop() {
-      if (recog) { try { recog.stop(); } catch (_) {} }
+    async function startVisualizer() {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+        audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        audioCtx = new AC();
+        const srcNode = audioCtx.createMediaStreamSource(audioStream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.7;
+        srcNode.connect(analyser);
+        drawWave();
+      } catch (_) {
+        // Visualizer is best-effort; transcription can still run without it.
+      }
     }
 
-    micBtn.addEventListener('click', () => {
-      if (recording) { stop(); return; }
+    function drawWave() {
+      if (!analyser || !recCanvas || !recCanvas.getContext) return;
+      const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const ctx = recCanvas.getContext('2d');
+      const W = recCanvas.width, H = recCanvas.height;
+      const bins = analyser.frequencyBinCount;
+      const data = new Uint8Array(bins);
+      const BARS = 32;
+      const accent = (getComputedStyle(document.documentElement)
+        .getPropertyValue('--accent-1') || '#8b5cf6').trim();
+      function frame() {
+        rafId = requestAnimationFrame(frame);
+        analyser.getByteFrequencyData(data);
+        ctx.clearRect(0, 0, W, H);
+        const bw = W / BARS;
+        for (let i = 0; i < BARS; i++) {
+          const v = data[Math.floor((i / BARS) * bins)] / 255;       // 0..1
+          const h = Math.max(2, v * H);
+          ctx.fillStyle = accent;
+          ctx.globalAlpha = 0.3 + 0.7 * v;
+          ctx.fillRect(i * bw + 1, (H - h) / 2, Math.max(1, bw - 2), h);
+        }
+        ctx.globalAlpha = 1;
+      }
+      if (reduce) {          // draw one static frame, don't animate
+        analyser.getByteFrequencyData(data);
+        ctx.clearRect(0, 0, W, H);
+        ctx.fillStyle = accent;
+        ctx.fillRect(0, H / 2 - 1, W, 2);
+        return;
+      }
+      frame();
+    }
 
+    function stopVisualizer() {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      if (recCanvas && recCanvas.getContext) {
+        recCanvas.getContext('2d').clearRect(0, 0, recCanvas.width, recCanvas.height);
+      }
+      if (audioStream) { audioStream.getTracks().forEach((t) => { try { t.stop(); } catch (_) {} }); audioStream = null; }
+      if (audioCtx) { try { audioCtx.close(); } catch (_) {} audioCtx = null; }
+      analyser = null;
+    }
+
+    function startRecog() {
       recog = new SR();
-      recog.lang = navigator.language || 'en-US';
+      try { recog.lang = navigator.language || 'en-US'; } catch (_) {}
       recog.continuous = true;
       recog.interimResults = true;
 
-      baseText = promptEl.value;
-      const sep = baseText && !/\s$/.test(baseText) ? ' ' : '';
-
       recog.onresult = (event) => {
-        let finalChunk = '';
-        let interimChunk = '';
+        let finalChunk = '', interimChunk = '';
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const res = event.results[i];
           if (res.isFinal) finalChunk += res[0].transcript;
           else interimChunk += res[0].transcript;
         }
-        // Commit finals into baseText so they survive across result events.
-        if (finalChunk) {
-          baseText = baseText + sep + finalChunk.trim();
-        }
+        if (finalChunk) baseText = baseText + sep + finalChunk.trim();
+        if (finalChunk && !/\s$/.test(baseText)) sep = ' ';
         const liveSep = baseText && interimChunk && !/\s$/.test(baseText) ? ' ' : '';
         promptEl.value = baseText + (interimChunk ? liveSep + interimChunk : '');
         autosize();
       };
 
       recog.onerror = (event) => {
-        setRecording(false);
         const code = event && event.error;
+        if (code === 'no-speech' || code === 'aborted') return;  // transient — onend restarts
         if (code === 'not-allowed' || code === 'service-not-allowed') {
-          showError('Microphone access was blocked. You can type instead.');
-        } else if (code && code !== 'aborted' && code !== 'no-speech') {
-          showError('Voice input stopped. You can type instead.');
+          showError('Microphone access is blocked — allow it in your browser settings, or type instead.');
+        } else if (code === 'audio-capture') {
+          showError('No microphone was found. You can type instead.');
+        } else if (code === 'network') {
+          showError('Voice needs an internet connection right now. You can type instead.');
+        } else {
+          showError('Voice had a hiccup — tap the mic to try again, or type.');
+        }
+        endRecording();
+      };
+
+      recog.onend = () => {
+        // Continuous recognition ends itself on pauses; restart while the user
+        // still wants to dictate (bounded so a hard failure can't loop forever).
+        if (recording && !manualStop && restarts < 60) {
+          restarts++;
+          setTimeout(() => {
+            if (recording && !manualStop) { try { recog.start(); } catch (_) {} }
+          }, 200);
+        } else if (!recording) {
+          stopVisualizer();
+          showRecUI(false);
         }
       };
 
-      recog.onend = () => { setRecording(false); };
+      try { recog.start(); } catch (_) { /* start() can throw right after stop(); onend retries */ }
+    }
 
-      try {
-        recog.start();
-        setRecording(true);
-      } catch (_) {
-        setRecording(false);
-        showError('Could not start voice input. You can type instead.');
-      }
+    function beginRecording() {
+      recording = true; manualStop = false; restarts = 0;
+      baseText = promptEl.value;
+      sep = baseText && !/\s$/.test(baseText) ? ' ' : '';
+      showRecUI(true);
+      startVisualizer();
+      startRecog();
+    }
+
+    function endRecording() {
+      manualStop = true;
+      recording = false;
+      if (recog) { try { recog.stop(); } catch (_) {} }
+      stopVisualizer();
+      showRecUI(false);
+    }
+
+    micBtn.addEventListener('click', () => {
+      if (recording) endRecording(); else beginRecording();
     });
   })();
 

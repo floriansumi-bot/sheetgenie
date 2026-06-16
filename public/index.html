@@ -71,6 +71,11 @@
         </button>
       </div>
       <p id="micHint" class="mic-hint" hidden>Voice not supported on this browser - type instead.</p>
+      <div id="recIndicator" class="rec-indicator" hidden aria-live="polite">
+        <span class="rec-dot" aria-hidden="true"></span>
+        <span class="rec-label">Listening… tap the mic to stop</span>
+        <canvas id="recCanvas" class="rec-canvas" width="220" height="22" aria-hidden="true"></canvas>
+      </div>
 
       <button id="dataToggle" class="data-toggle" type="button" aria-expanded="false" aria-controls="dataPanel">
         <span class="chev" aria-hidden="true">▸</span>
