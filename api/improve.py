@@ -384,13 +384,16 @@ class handler(BaseHTTPRequestHandler):
             # Log the full error server-side (Vercel captures stderr) but never
             # leak the API key, raw exception text, or a stack trace to the client.
             traceback.print_exc(file=sys.stderr)
-            self._send_json(
-                500,
-                {
-                    "error": "Something went wrong generating your spreadsheet plan. "
-                    "Please try again."
-                },
-            )
+            try:
+                self._send_json(
+                    500,
+                    {
+                        "error": "Something went wrong generating your spreadsheet plan. "
+                        "Please try again."
+                    },
+                )
+            except Exception:  # noqa: BLE001 — headers/body may already be sent
+                traceback.print_exc(file=sys.stderr)
 
     def log_message(self, *args):  # noqa: D401 — silence default stderr access logs
         return

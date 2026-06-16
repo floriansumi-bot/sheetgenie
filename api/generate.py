@@ -21,6 +21,7 @@ from http.server import BaseHTTPRequestHandler
 
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
+from openpyxl.chart.series import SeriesLabel
 from openpyxl.utils import get_column_letter
 from openpyxl.styles import Font, PatternFill, Alignment
 
@@ -374,9 +375,18 @@ def _render_charts(ws, sheet, columns, first_data_row, last_data_row):
             value_cols = value_cols[:1]  # pie uses only the first value column
 
         for vc in value_cols:
-            # min_row=1 so the header row becomes the series name.
-            series_ref = Reference(ws, min_col=vc, min_row=1, max_row=data_end)
-            chart.add_data(series_ref, titles_from_data=True)
+            # The value series row span MUST equal the categories span
+            # (data_start..data_end) or values and labels misalign whenever
+            # dataStartRow > the first data row. Take the series name from the
+            # header cell explicitly rather than folding row 1 into the range.
+            series_ref = Reference(ws, min_col=vc, min_row=data_start, max_row=data_end)
+            chart.add_data(series_ref, titles_from_data=False)
+            header_val = ws.cell(row=1, column=vc).value
+            if header_val is not None and chart.series:
+                try:
+                    chart.series[-1].tx = SeriesLabel(v=str(header_val))
+                except Exception:  # noqa: BLE001 — title is cosmetic; never fail the chart
+                    pass
 
         chart.set_categories(categories)
 

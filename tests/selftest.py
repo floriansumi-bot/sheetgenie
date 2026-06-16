@@ -133,6 +133,28 @@ def test_generate():
     check("date: ISO string coerced to a date", isinstance(wb4.active["A2"].value, (_dt.date, _dt.datetime)))
     check("date: pie chart present", len(wb4.active._charts) == 1)
 
+    # --- Chart series/category alignment with dataStartRow > 2 (regression) ---
+    import re as _re
+    aligned = {"title": "a", "sheets": [{"name": "S",
+               "columns": [{"header": "Label", "type": "text"}, {"header": "Val", "type": "number"}],
+               "rows": [["r2", 10], ["r3", 20], ["r4", 30], ["r5", 40], ["r6", 50]],
+               "charts": [{"type": "bar", "title": "c", "categoriesColumn": 1,
+                           "valueColumns": [2], "dataStartRow": 3}]}]}
+    gen._validate_spec(aligned)
+    chA = load_workbook(io.BytesIO(gen._build_workbook(aligned))).active._charts[0]
+
+    def _rows(f):
+        m = _re.findall(r"\$[A-Z]+\$(\d+)", f or "")
+        return (int(m[0]), int(m[-1])) if m else None
+
+    ser = chA.series[0]
+    val_rows = _rows(ser.val.numRef.f)
+    cat_ref = (ser.cat.strRef.f if ser.cat and ser.cat.strRef
+               else (ser.cat.numRef.f if ser.cat and ser.cat.numRef else None))
+    cat_rows = _rows(cat_ref)
+    check("chart align: series span == category span (dataStartRow=3)", val_rows == cat_rows)
+    check("chart align: both span rows 3..6", val_rows == (3, 6))
+
     # --- Validation rejections (expect SpecError -> 400) --------------------
     def rejects(label, spec):
         try:
