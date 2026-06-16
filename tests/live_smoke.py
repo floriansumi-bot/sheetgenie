@@ -26,9 +26,27 @@ def _load(name, rel):
     return mod
 
 
+def _load_dotenv():
+    """Load KEY=VALUE pairs from a local .env (gitignored) into the environment."""
+    path = os.path.join(ROOT, ".env")
+    if not os.path.isfile(path):
+        return
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+
+
 def main():
+    _load_dotenv()
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        print("ANTHROPIC_API_KEY is not set. Set it first (see this file's header).")
+        print("ANTHROPIC_API_KEY is not set. Put it in a local .env file "
+              "(ANTHROPIC_API_KEY=sk-ant-...), or set it in the environment.")
         return 2
 
     imp = _load("improve_mod", os.path.join("api", "improve.py"))
