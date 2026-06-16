@@ -31,11 +31,33 @@ This is the only endpoint that calls the Anthropic API.
   "prompt": "string  — the raw user prompt (typed or dictated)",
   "hasData": true,
   "data": "string|null — raw pasted tabular text (CSV/TSV/lines), optional",
+  "baseSpec": { "...": "an existing SpreadsheetSpec to EDIT (optional)" },
+  "files": [
+    {
+      "type": "image | pdf",
+      "media_type": "image/jpeg | image/png | image/webp | image/gif | application/pdf",
+      "data": "base64-encoded bytes (NO 'data:' prefix)",
+      "name": "string — optional original filename"
+    }
+  ],
   "clarifications": [
     { "question": "string — a question we previously asked", "answer": "string — the user's answer" }
   ]
 }
 ```
+`files` is optional. The client may attach photos / screenshots / scans (sent to the
+model as **image** blocks) and PDFs (sent as **document** blocks); the model reads them
+to extract the data and fill the rows. Images are downscaled client-side and the **total
+request body is kept under ~4 MB** (the serverless limit) — at most **6 attachments**.
+Allowed media types: the four image types above plus `application/pdf`. The server
+re-validates type, count, and size and returns `400`/`413` otherwise.
+
+`baseSpec` is optional. When present, the request is an **edit**: the model modifies
+that spec per `prompt` (the change / import instruction) plus any new `data`/`files`,
+and returns the COMPLETE updated spec (`status: "ready"`) — or asks a question if the
+instruction is ambiguous. This powers the in-app library, which stores past specs in
+the browser (IndexedDB) so they can be re-opened, edited, and re-downloaded.
+
 `clarifications` is optional / `null` on the first call. If the previous response was
 `status: "needs_input"`, the client re-calls with the same `prompt`/`data` plus the
 user's answers here.

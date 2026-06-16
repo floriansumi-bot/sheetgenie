@@ -198,6 +198,24 @@ rows (about 8 to 15) so the workbook is immediately useful — UNLESS the user \
 clearly wants a blank/empty template, in which case set rows to [].
 - Formula-column cells are always null in rows (see above).
 
+ATTACHMENTS (images and PDFs)
+- The user may attach photos, screenshots, scans, or PDFs that CONTAIN the data. \
+Read every attachment carefully and transcribe its tabular data into rows mapped to \
+your columns. Preserve numbers, dates, currencies, and labels EXACTLY as shown, and \
+infer the column headers from the attachment when the request doesn't name them. \
+Combine attachment data with any pasted text. If an attachment is genuinely \
+unreadable, or its structure is too ambiguous to map confidently, ask a clarifying \
+question (status "needs_input") instead of guessing.
+
+EDITING AN EXISTING SPREADSHEET
+- If a CURRENT SPREADSHEET is provided, treat the request as an EDIT instruction. \
+Modify that spec accordingly — add / remove / rename columns or sheets, add or change \
+rows, sort, add formulas or charts, or merge in new data / attachments as instructed. \
+PRESERVE the existing sheets, columns, and data unless the instruction clearly says to \
+change or remove them. Always return the COMPLETE updated spec (every sheet), not just \
+the delta. If the instruction is ambiguous (e.g. "add this data" without saying which \
+sheet or how), ask a clarifying question (status "needs_input").
+
 CHARTS
 - Add charts when the request implies visualization (e.g. "with a chart", \
 "compare", "trend", "breakdown") or when a chart would clearly help.
@@ -262,14 +280,74 @@ try:
 except (TypeError, ValueError):
     MAX_TOKENS = 10000
 
-# Hard cap on the request body (prompt + pasted data) to prevent abuse.
-MAX_BODY_BYTES = 256 * 1024  # 256 KB
+# Hard cap on the request body. Attachments (images / PDFs, base64) ride along, so
+# this is larger than the text-only case — but kept UNDER Vercel's ~4.5 MB serverless
+# request-body limit so our friendly 413 fires before the platform's opaque one.
+MAX_BODY_BYTES = 4 * 1024 * 1024  # 4 MB
+
+# Attachment limits (re-validated server-side; the client also caps + downscales).
+MAX_FILES = 6
+MAX_FILE_B64 = 3_700_000          # per-file base64 length (~2.8 MB)
+MAX_FILES_B64_TOTAL = 3_700_000   # combined base64 length across all attachments
+_IMAGE_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 _CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
 }
+
+
+class _InputError(Exception):
+    """Bad client input -> HTTP 400 with a safe, human-readable message."""
+
+
+def _build_file_blocks(files):
+    """Validate request `files` and convert to Anthropic content blocks.
+
+    Images become image blocks; PDFs become document blocks. Raises _InputError
+    (-> 400) on a bad type / media_type / size, or too many attachments.
+    """
+    if files is None:
+        return []
+    if not isinstance(files, list):
+        raise _InputError("Attached files are malformed.")
+    if len(files) > MAX_FILES:
+        raise _InputError("Too many attachments (max %d)." % MAX_FILES)
+
+    blocks = []
+    total = 0
+    for f in files:
+        if not isinstance(f, dict):
+            raise _InputError("Attached files are malformed.")
+        kind = f.get("type")
+        media_type = f.get("media_type")
+        data = f.get("data")
+        if not isinstance(data, str) or not data:
+            raise _InputError("An attachment is empty or unreadable.")
+        if len(data) > MAX_FILE_B64:
+            raise _InputError("An attachment is too large. Try a smaller or clearer file.")
+        total += len(data)
+        if total > MAX_FILES_B64_TOTAL:
+            raise _InputError("The attachments are too large together. Use fewer or smaller files.")
+
+        if kind == "image":
+            if media_type not in _IMAGE_MEDIA_TYPES:
+                raise _InputError("Unsupported image type.")
+            blocks.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": media_type, "data": data},
+            })
+        elif kind == "pdf":
+            if media_type != "application/pdf":
+                raise _InputError("Unsupported document type.")
+            blocks.append({
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": data},
+            })
+        else:
+            raise _InputError("Unsupported attachment type.")
+    return blocks
 
 
 class handler(BaseHTTPRequestHandler):
@@ -344,6 +422,15 @@ class handler(BaseHTTPRequestHandler):
             # --- Build the user message -------------------------------------
             data = payload.get("data")
             user_text = "Request:\n" + prompt.strip()
+
+            base_spec = payload.get("baseSpec")
+            if isinstance(base_spec, dict) and isinstance(base_spec.get("sheets"), list):
+                user_text += (
+                    "\n\nCURRENT SPREADSHEET to edit — apply the request to THIS and "
+                    "return the COMPLETE updated spec (keep existing data and columns "
+                    "unless the request says to change them):\n" + json.dumps(base_spec)
+                )
+
             if isinstance(data, str) and data.strip():
                 user_text += (
                     "\n\nUser-provided data to fill in:\n" + data.strip()
@@ -367,6 +454,20 @@ class handler(BaseHTTPRequestHandler):
                         "spreadsheet now):\n" + "\n".join(qa_lines)
                     )
 
+            # --- Attachments (images / PDFs) --------------------------------
+            try:
+                file_blocks = _build_file_blocks(payload.get("files"))
+            except _InputError as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            content = [{"type": "text", "text": user_text}]
+            if file_blocks:
+                content[0]["text"] += (
+                    "\n\nThe data to use is in the attached file(s) below — read "
+                    "them carefully and transcribe the data into the rows."
+                )
+                content.extend(file_blocks)
+
             # --- Call the Anthropic API -------------------------------------
             # The SDK resolves ANTHROPIC_API_KEY from the environment. We never
             # pass temperature/top_p/top_k (removed on current models -> HTTP 400).
@@ -389,7 +490,7 @@ class handler(BaseHTTPRequestHandler):
                         model=model,
                         max_tokens=MAX_TOKENS,
                         system=SYSTEM_PROMPT,
-                        messages=[{"role": "user", "content": user_text}],
+                        messages=[{"role": "user", "content": content}],
                         output_config=output_config,
                         **extra,
                     )

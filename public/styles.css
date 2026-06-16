@@ -235,9 +235,11 @@ body {
 
 /* ---------- toast / error ---------- */
 .toast {
-  margin-top: 16px; padding: 12px 14px; border-radius: var(--radius-sm);
+  position: fixed; left: 16px; right: 16px; bottom: max(16px, env(safe-area-inset-bottom));
+  max-width: 728px; margin: 0 auto; z-index: 50;
+  padding: 12px 14px; border-radius: var(--radius-sm);
   background: var(--danger-bg); border: 1px solid rgba(248, 113, 113, 0.4);
-  color: var(--danger); font-size: 0.95rem;
+  color: var(--danger); font-size: 0.95rem; box-shadow: var(--shadow);
 }
 
 /* ---------- results ---------- */
@@ -328,6 +330,109 @@ table.preview .more-row td {
 }
 .q-actions { margin-top: 16px; display: flex; gap: 12px; }
 .q-actions .btn { flex: 0 1 auto; min-width: 160px; }
+
+/* ---------- attachments (upload / camera) ---------- */
+.attach-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.attach-btn {
+  appearance: none; cursor: pointer; font: inherit; font-size: 0.92rem; font-weight: 600;
+  color: var(--text); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 9px 14px; min-height: 44px;
+  display: inline-flex; align-items: center; gap: 7px;
+  transition: border-color var(--t), background var(--t);
+}
+.attach-btn:hover { border-color: var(--accent-1); }
+.attach-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+.attach-item {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 7px 10px;
+}
+.attach-thumb { width: 34px; height: 34px; object-fit: cover; border-radius: 7px; flex: none; }
+.attach-ic { font-size: 1.3rem; width: 34px; text-align: center; flex: none; }
+.attach-name {
+  flex: 1 1 auto; min-width: 0; font-size: 0.9rem; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.attach-remove {
+  appearance: none; cursor: pointer; border: none; background: none;
+  color: var(--text-faint); font-size: 1rem; line-height: 1; padding: 6px; border-radius: 6px;
+  flex: none; transition: color var(--t), background var(--t);
+}
+.attach-remove:hover { color: var(--danger); background: var(--danger-bg); }
+.attach-hint { margin: 10px 2px 0; font-size: 0.82rem; color: var(--text-faint); }
+
+/* ---------- topbar actions / library button ---------- */
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.icon-btn {
+  position: relative; appearance: none; cursor: pointer;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  width: 42px; height: 42px; border-radius: 50%; font-size: 1.15rem; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: border-color var(--t), transform var(--t);
+}
+.icon-btn:hover { border-color: var(--accent-1); }
+.icon-btn:active { transform: scale(0.94); }
+.lib-count {
+  position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 4px;
+  border-radius: 9px; background: var(--accent-1); color: #fff;
+  font-size: 0.68rem; font-weight: 800; line-height: 18px; text-align: center;
+}
+
+/* ---------- edit banner ---------- */
+.edit-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 14px; padding: 10px 12px;
+  background: rgba(139, 92, 246, 0.12); border: 1px solid rgba(139, 92, 246, 0.4);
+  border-radius: var(--radius-sm); color: var(--text); font-size: 0.92rem;
+}
+.edit-banner strong { color: var(--accent-text); }
+.edit-banner-new {
+  appearance: none; cursor: pointer; font: inherit; font-size: 0.85rem; font-weight: 700;
+  color: var(--accent-text); background: none; border: 1px solid rgba(139, 92, 246, 0.5);
+  border-radius: 999px; padding: 5px 12px; white-space: nowrap;
+}
+.edit-banner-new:hover { border-color: var(--accent-1); }
+
+/* ---------- results actions ---------- */
+.results-actions { display: flex; gap: 12px; }
+.results-actions .btn { flex: 0 1 auto; min-width: 160px; }
+
+/* ---------- library ---------- */
+.library {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); margin-top: 16px;
+}
+.library-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.library-title { margin: 0; font-size: 1.15rem; font-weight: 800; letter-spacing: -0.01em; }
+.lib-close {
+  appearance: none; cursor: pointer; border: none; background: none; color: var(--text-faint);
+  font-size: 1.1rem; line-height: 1; padding: 6px; border-radius: 6px;
+}
+.lib-close:hover { color: var(--text); }
+.lib-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.lib-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 10px 12px;
+}
+.lib-info { display: flex; flex-direction: column; min-width: 0; }
+.lib-name { font-weight: 700; font-size: 0.98rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-meta { color: var(--text-faint); font-size: 0.8rem; }
+.lib-acts { display: flex; gap: 6px; flex: none; }
+.lib-act {
+  appearance: none; cursor: pointer; font: inherit; font-size: 0.84rem; font-weight: 600;
+  color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 11px; min-height: 38px;
+  transition: border-color var(--t), color var(--t), background var(--t);
+}
+.lib-act:hover { border-color: var(--accent-1); }
+.lib-act.lib-del:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-bg); }
+.lib-empty { color: var(--text-faint); font-size: 0.9rem; margin: 4px 2px 0; }
+
+/* ---------- success toast ---------- */
+.toast.toast-ok {
+  background: rgba(52, 211, 153, 0.12); border-color: rgba(52, 211, 153, 0.4); color: var(--ok);
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }

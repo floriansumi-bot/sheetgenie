@@ -17,6 +17,6 @@ venv/
 Thumbs.db
 *.swp
 
-# Local scratch
+# Local scratch / test artifacts
 /tmp/
-*.local.xlsx
+*.local.*

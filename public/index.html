@@ -35,9 +35,14 @@
       </span>
       <span class="brand-name">SheetGenie</span>
     </div>
-    <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle light or dark theme" title="Toggle theme">
-      <span class="theme-icon" aria-hidden="true">◐</span>
-    </button>
+    <div class="topbar-actions">
+      <button id="libraryToggle" class="icon-btn" type="button" aria-label="My spreadsheets" title="My spreadsheets" aria-controls="library" aria-expanded="false">
+        <span aria-hidden="true">📚</span><span id="libCount" class="lib-count" aria-hidden="true" hidden>0</span>
+      </button>
+      <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle light or dark theme" title="Toggle theme">
+        <span class="theme-icon" aria-hidden="true">◐</span>
+      </button>
+    </div>
   </header>
 
   <main class="wrap">
@@ -48,6 +53,11 @@
 
     <section class="card capture" aria-labelledby="capture-h">
       <h2 id="capture-h" class="sr-only">Describe your spreadsheet</h2>
+
+      <div id="editBanner" class="edit-banner" hidden>
+        <span class="edit-banner-text">Editing <strong id="editTitle">spreadsheet</strong> — describe changes or add data below.</span>
+        <button id="newSheetBtn" class="edit-banner-new" type="button">New spreadsheet</button>
+      </div>
 
       <div class="prompt-row">
         <label class="sr-only" for="prompt">What spreadsheet do you need?</label>
@@ -71,6 +81,19 @@
         <label class="sr-only" for="data">Paste your data (CSV, TSV, or one item per line)</label>
         <textarea id="data" class="data-input" rows="5"
           placeholder="Paste rows here — CSV, TSV, or one item per line.&#10;Category,Budgeted,Actual&#10;Rent,1500,1500"></textarea>
+        <div class="attach-row">
+          <button id="uploadBtn" class="attach-btn" type="button">
+            <span aria-hidden="true">📎</span> Upload file
+          </button>
+          <button id="cameraBtn" class="attach-btn" type="button">
+            <span aria-hidden="true">📷</span> Take photo
+          </button>
+        </div>
+        <input id="fileInput" class="sr-only" type="file" multiple
+          accept="image/*,application/pdf,.csv,.tsv,.txt,text/plain,text/csv">
+        <input id="cameraInput" class="sr-only" type="file" accept="image/*" capture="environment">
+        <ul id="attachList" class="attach-list" hidden></ul>
+        <p class="attach-hint">Add photos, screenshots, or PDFs — I'll read the data from them.</p>
       </div>
 
       <div class="actions">
@@ -79,7 +102,17 @@
           <span class="shimmer" aria-hidden="true"></span>
         </button>
         <button id="download" class="btn btn-secondary" type="button" disabled>Download .xlsx</button>
+        <button id="saveLib" class="btn btn-secondary" type="button" disabled>Save to library</button>
       </div>
+    </section>
+
+    <section id="library" class="library" hidden aria-label="My spreadsheets">
+      <div class="library-head">
+        <h2 class="library-title">My spreadsheets</h2>
+        <button id="libraryClose" class="lib-close" type="button" aria-label="Close library">✕</button>
+      </div>
+      <ul id="libList" class="lib-list"></ul>
+      <p id="libEmpty" class="lib-empty" hidden>No saved spreadsheets yet — generate one, then tap “Save to library”.</p>
     </section>
 
     <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>

@@ -35,16 +35,37 @@
   const dataPanel = $('dataPanel');
   const dataInput = $('data');
   const dataBadge = $('dataBadge');
+  const uploadBtn = $('uploadBtn');
+  const cameraBtn = $('cameraBtn');
+  const fileInput = $('fileInput');
+  const cameraInput = $('cameraInput');
+  const attachList = $('attachList');
   const improveBtn = $('improve');
   const downloadBtn = $('download');
   const toastEl = $('toast');
   const resultsEl = $('results');
   const themeToggle = $('themeToggle');
+  const saveLibBtn = $('saveLib');
+  const libraryToggle = $('libraryToggle');
+  const libCount = $('libCount');
+  const librarySection = $('library');
+  const libraryClose = $('libraryClose');
+  const libList = $('libList');
+  const libEmpty = $('libEmpty');
+  const editBanner = $('editBanner');
+  const editTitle = $('editTitle');
+  const newSheetBtn = $('newSheetBtn');
 
   /* ---------- app state ---------- */
   let currentSpec = null;     // last valid SpreadsheetSpec from /api/improve
   let busy = false;           // a network call is in flight
   let toastTimer = null;
+  let attachments = [];       // {name, kind:'image'|'pdf', mediaType, data(base64), thumb}
+  const MAX_ATTACH = 6;
+  const MAX_TOTAL_B64 = 3500000;  // ~2.6 MB raw; keeps the request under the serverless limit
+  let baseSpec = null;        // when set, /api/improve EDITS this spec (edit mode)
+  let currentLibId = null;    // library record id for the working spec (null = unsaved)
+  const PROMPT_PLACEHOLDER = promptEl.placeholder;
 
   /* ============================================================
      Theme: manual override stored in localStorage, else OS preference.
@@ -103,11 +124,130 @@
     if (!open) dataInput.focus();
   });
 
-  function hasData() { return dataInput.value.trim().length > 0; }
+  function hasData() {
+    return dataInput.value.trim().length > 0 || attachments.length > 0;
+  }
+  function updateDataBadge() { dataBadge.hidden = !hasData(); }
 
-  dataInput.addEventListener('input', () => {
-    dataBadge.hidden = !hasData();
-  });
+  dataInput.addEventListener('input', updateDataBadge);
+
+  /* ---------- attachments: upload / camera / text files ---------- */
+  uploadBtn.addEventListener('click', () => fileInput.click());
+  cameraBtn.addEventListener('click', () => cameraInput.click());
+  fileInput.addEventListener('change', (e) => { handleFiles(e.target.files); fileInput.value = ''; });
+  cameraInput.addEventListener('change', (e) => { handleFiles(e.target.files); cameraInput.value = ''; });
+
+  async function handleFiles(fileList) {
+    const files = Array.from(fileList || []);
+    for (const file of files) {
+      if (attachments.length >= MAX_ATTACH) {
+        showError('You can attach up to ' + MAX_ATTACH + ' files.');
+        break;
+      }
+      try {
+        if (file.type && file.type.indexOf('image/') === 0) {
+          const b64 = await downscaleImageToJpegBase64(file);
+          if (!addAttachment({ name: file.name || 'photo.jpg', kind: 'image',
+            mediaType: 'image/jpeg', data: b64, thumb: 'data:image/jpeg;base64,' + b64 })) break;
+        } else if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '')) {
+          const b64 = await readAsBase64(file);
+          if (!addAttachment({ name: file.name || 'document.pdf', kind: 'pdf',
+            mediaType: 'application/pdf', data: b64, thumb: null })) break;
+        } else if (isTextLike(file)) {
+          appendData(await readAsText(file));
+        } else {
+          showError('Unsupported file: ' + (file.name || file.type || 'unknown') + '. Use an image, PDF, or text/CSV.');
+        }
+      } catch (_) {
+        showError('Could not read "' + (file.name || 'that file') + '". Try a different file.');
+      }
+    }
+    renderAttachments();
+    updateDataBadge();
+  }
+
+  function isTextLike(file) {
+    return (file.type && (file.type.indexOf('text/') === 0 || file.type === 'text/csv'))
+      || /\.(csv|tsv|txt)$/i.test(file.name || '');
+  }
+
+  function appendData(text) {
+    const cur = dataInput.value;
+    dataInput.value = (cur && cur.trim()) ? (cur.replace(/\s+$/, '') + '\n' + text) : text;
+  }
+
+  function totalB64() { return attachments.reduce((n, a) => n + a.data.length, 0); }
+
+  function addAttachment(att) {
+    if (totalB64() + att.data.length > MAX_TOTAL_B64) {
+      showError('That would make the upload too large. Use fewer or smaller files (or a clearer photo).');
+      return false;
+    }
+    attachments.push(att);
+    return true;
+  }
+
+  function readAsBase64(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => { const s = String(r.result); const i = s.indexOf(','); resolve(i >= 0 ? s.slice(i + 1) : s); };
+      r.onerror = () => reject(r.error || new Error('read failed'));
+      r.readAsDataURL(file);
+    });
+  }
+
+  function readAsText(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || ''));
+      r.onerror = () => reject(r.error || new Error('read failed'));
+      r.readAsText(file);
+    });
+  }
+
+  // Load an image, downscale to <= 2000px on the long edge, re-encode as JPEG, and
+  // return the base64 (no data: prefix). Keeps photos small enough to upload.
+  function downscaleImageToJpegBase64(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        const MAX = 2000;
+        let w = img.naturalWidth || img.width;
+        let h = img.naturalHeight || img.height;
+        // SVG/undecodable images can report no intrinsic size -> a 0x0 canvas would
+        // produce a blank JPEG. Reject so the caller shows a friendly error instead.
+        if (!w || !h) { reject(new Error('image has no dimensions')); return; }
+        if (Math.max(w, h) > MAX) { const s = MAX / Math.max(w, h); w = Math.round(w * s); h = Math.round(h * s); }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        const durl = canvas.toDataURL('image/jpeg', 0.82);
+        const i = durl.indexOf(',');
+        resolve(i >= 0 ? durl.slice(i + 1) : durl);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('image decode failed')); };
+      img.src = url;
+    });
+  }
+
+  function renderAttachments() {
+    attachList.replaceChildren();
+    if (!attachments.length) { attachList.hidden = true; return; }
+    attachList.hidden = false;
+    attachments.forEach((att, idx) => {
+      const li = el('li', { class: 'attach-item' });
+      if (att.thumb) li.appendChild(el('img', { class: 'attach-thumb', attrs: { src: att.thumb, alt: '' } }));
+      else li.appendChild(el('span', { class: 'attach-ic', attrs: { 'aria-hidden': 'true' }, text: '📄' }));
+      li.appendChild(el('span', { class: 'attach-name', text: att.name }));
+      const rm = el('button', { class: 'attach-remove', text: '✕',
+        attrs: { type: 'button', 'aria-label': 'Remove ' + att.name } });
+      rm.addEventListener('click', () => { attachments.splice(idx, 1); renderAttachments(); updateDataBadge(); });
+      li.appendChild(rm);
+      attachList.appendChild(li);
+    });
+  }
 
   /* ============================================================
      Voice capture via Web Speech API.
@@ -190,27 +330,40 @@
      ============================================================ */
   function showError(message) {
     toastEl.textContent = String(message || 'Something went wrong.');
+    toastEl.classList.remove('toast-ok');
     toastEl.hidden = false;
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => { toastEl.hidden = true; }, 7000);
   }
+  function showOk(message) {
+    toastEl.textContent = String(message || 'Done.');
+    toastEl.classList.add('toast-ok');
+    toastEl.hidden = false;
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toastEl.hidden = true; toastEl.classList.remove('toast-ok'); }, 4000);
+  }
   function clearError() {
     toastEl.hidden = true;
     toastEl.textContent = '';
+    toastEl.classList.remove('toast-ok');
     if (toastTimer) clearTimeout(toastTimer);
   }
 
   /* ============================================================
      Loading state for the primary action.
      ============================================================ */
+  function refreshPrimaryLabel() {
+    const label = improveBtn.querySelector('.btn-label');
+    if (label) label.textContent = busy ? 'Working...' : (baseSpec ? 'Apply changes' : 'Improve & preview');
+  }
   function setBusy(on) {
     busy = on;
     improveBtn.classList.toggle('is-loading', on);
     improveBtn.disabled = on;
-    // Download stays disabled while busy or until we have a spec.
+    // Download / Save stay disabled while busy or until we have a spec.
     downloadBtn.disabled = on || !currentSpec;
-    const label = improveBtn.querySelector('.btn-label');
-    if (label) label.textContent = on ? 'Working...' : 'Improve & preview';
+    saveLibBtn.disabled = on || !currentSpec;
+    refreshPrimaryLabel();
   }
 
   /* ============================================================
@@ -221,17 +374,29 @@
   // Remember the original request so a clarification round can re-send it.
   let pendingPrompt = '';
   let pendingData = null;
+  let pendingFiles = [];
+  let pendingBaseSpec = null;
 
   function onImprove() {
     if (busy) return;
-    const prompt = promptEl.value.trim();
+    let prompt = promptEl.value.trim();
+    const haveData = dataInput.value.trim().length > 0 || attachments.length > 0;
+    if (!prompt && haveData) {
+      prompt = baseSpec ? 'Update this spreadsheet with the new data.' : 'Create a spreadsheet from the attached data.';
+    }
     if (!prompt) {
-      showError('Tell me what spreadsheet you need first.');
+      showError(baseSpec ? 'Tell me what to change, or add some data.' : 'Tell me what spreadsheet you need first.');
       promptEl.focus();
       return;
     }
+    // A fresh, non-edit generation starts a NEW library entry. Drop any stale
+    // currentLibId so saving/downloading the new spec can't overwrite the record
+    // of a previously-saved spreadsheet.
+    if (!baseSpec) currentLibId = null;
     pendingPrompt = prompt;
-    pendingData = hasData() ? dataInput.value : null;
+    pendingData = dataInput.value.trim() ? dataInput.value : null;
+    pendingFiles = attachments.map((a) => ({ type: a.kind, media_type: a.mediaType, data: a.data, name: a.name }));
+    pendingBaseSpec = baseSpec;
     runImprove(null);
   }
 
@@ -241,15 +406,31 @@
     if (busy) return;
     clearError();
     setBusy(true);
-    currentSpec = null;                 // a new request invalidates any prior spec
-    downloadBtn.disabled = true;
+    // A fresh request invalidates any prior spec. An EDIT keeps the base spec so a
+    // failed "Apply changes" leaves the loaded file intact and still downloadable.
+    if (!pendingBaseSpec) {
+      currentSpec = null;
+      downloadBtn.disabled = true;
+    }
 
     const body = {
       prompt: pendingPrompt,
-      hasData: !!(pendingData && pendingData.trim()),
+      hasData: !!(pendingData && pendingData.trim()) || pendingFiles.length > 0,
       data: pendingData,
+      baseSpec: pendingBaseSpec || null,
+      files: pendingFiles.length ? pendingFiles : null,
       clarifications: clarifications || null,
     };
+
+    // Pre-flight size guard: baseSpec + data + attachments must fit the serverless
+    // body limit, else the server 413s only after a wasted upload.
+    if (JSON.stringify(body).length > 3900000) {
+      showError(pendingBaseSpec
+        ? 'This spreadsheet plus the new data is too large to edit at once — remove an attachment or split the change.'
+        : 'That request is too large — remove an attachment or shorten the data.');
+      setBusy(false);
+      return;
+    }
 
     try {
       const res = await fetchWithTimeout('/api/improve', {
@@ -295,7 +476,16 @@
     }
     currentSpec = payload.spec;
     downloadBtn.disabled = false;
+    saveLibBtn.disabled = false;
     renderResults(payload);
+    // If this was an edit, the updated spec becomes the new base for further edits,
+    // and we clear the instruction inputs so the next change starts fresh.
+    if (baseSpec) {
+      baseSpec = currentSpec;
+      promptEl.value = ''; autosize();
+      dataInput.value = ''; attachments = []; renderAttachments(); updateDataBadge();
+      if (currentLibId) saveCurrentToLibrary(false);  // keep a saved file's edits persisted
+    }
     resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
@@ -352,21 +542,29 @@
   function renderResults(payload) {
     resultsEl.replaceChildren();
 
-    // Improved prompt + notes card.
-    const improvedCard = el('div', { class: 'improved-card' });
-    improvedCard.appendChild(el('p', { class: 'eyebrow', text: 'Improved prompt' }));
-    improvedCard.appendChild(el('p', {
-      class: 'improved-text',
-      text: payload.improvedPrompt || '(no improved prompt returned)',
-    }));
-    if (payload.notes) {
-      improvedCard.appendChild(el('p', { class: 'notes', text: payload.notes }));
+    // Improved prompt + notes (AI results), or just a note (loaded library files).
+    if (payload.improvedPrompt) {
+      const improvedCard = el('div', { class: 'improved-card' });
+      improvedCard.appendChild(el('p', { class: 'eyebrow', text: 'Improved prompt' }));
+      improvedCard.appendChild(el('p', { class: 'improved-text', text: payload.improvedPrompt }));
+      if (payload.notes) improvedCard.appendChild(el('p', { class: 'notes', text: payload.notes }));
+      resultsEl.appendChild(improvedCard);
+    } else if (payload.notes) {
+      const noteCard = el('div', { class: 'improved-card' });
+      noteCard.appendChild(el('p', { class: 'notes', text: payload.notes }));
+      resultsEl.appendChild(noteCard);
     }
-    resultsEl.appendChild(improvedCard);
 
     // One card per sheet.
-    const sheets = Array.isArray(payload.spec.sheets) ? payload.spec.sheets : [];
+    const sheets = Array.isArray(payload.spec && payload.spec.sheets) ? payload.spec.sheets : [];
     sheets.forEach((sheet) => resultsEl.appendChild(renderSheetCard(sheet)));
+
+    // Edit affordance — enter edit mode on the current spec.
+    const editRow = el('div', { class: 'results-actions' });
+    const editBtn = el('button', { class: 'btn btn-secondary', attrs: { type: 'button' }, text: '✏️ Edit / add data' });
+    editBtn.addEventListener('click', () => enterEditMode(currentSpec, currentSpec && currentSpec.title));
+    editRow.appendChild(editBtn);
+    resultsEl.appendChild(editRow);
   }
 
   function renderSheetCard(sheet) {
@@ -495,48 +693,44 @@
 
   async function onDownload() {
     if (busy || !currentSpec) return;
+    const ok = await generateAndDownload(currentSpec, downloadBtn);
+    if (ok) saveCurrentToLibrary(false);  // a downloaded file is remembered in the library
+  }
 
+  // Build + download an .xlsx from any spec. `btn` (optional) shows a busy label.
+  async function generateAndDownload(spec, btn) {
+    if (!spec) return false;
     clearError();
-    const original = downloadBtn.textContent;
-    downloadBtn.disabled = true;
-    downloadBtn.textContent = 'Building...';
-
-    const filename = slugify(currentSpec.title || 'spreadsheet');
-    const body = { spec: currentSpec, filename };
-
+    const original = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Building...'; }
+    const filename = slugify((spec && spec.title) || 'spreadsheet');
     try {
       const res = await fetchWithTimeout('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ spec, filename }),
       }, 60000);
 
       // Errors come back as JSON { error }.
       const ctype = res.headers.get('Content-Type') || '';
       if (!res.ok || ctype.includes('application/json')) {
         let msg = 'Could not generate the file (' + res.status + ').';
-        try {
-          const payload = await res.json();
-          if (payload && payload.error) msg = payload.error;
-        } catch (_) {}
+        try { const p = await res.json(); if (p && p.error) msg = p.error; } catch (_) {}
         showError(msg);
-        return;
+        return false;
       }
 
       const blob = await res.blob();
-      const name = filenameFromDisposition(res.headers.get('Content-Disposition'))
-        || (slugify(currentSpec.title || 'spreadsheet') + '.xlsx');
-
+      const name = filenameFromDisposition(res.headers.get('Content-Disposition')) || (filename + '.xlsx');
       triggerDownload(blob, name);
+      return true;
     } catch (err) {
-      if (err && err.name === 'AbortError') {
-        showError('Building the file took too long. Please try again.');
-      } else {
-        showError('Could not reach the server to build your file. Try again.');
-      }
+      if (err && err.name === 'AbortError') showError('Building the file took too long. Please try again.');
+      else showError('Could not reach the server to build your file. Try again.');
+      return false;
     } finally {
-      downloadBtn.textContent = original;
-      downloadBtn.disabled = !currentSpec;
+      // Main download button follows the spec gate; per-row library buttons just re-enable.
+      if (btn) { btn.textContent = original; btn.disabled = (btn === downloadBtn) ? !currentSpec : false; }
     }
   }
 
@@ -581,6 +775,156 @@
       .slice(0, 60);
     return out || 'spreadsheet';
   }
+
+  /* ============================================================
+     Library — past spreadsheets saved in the browser (IndexedDB).
+     Each record: { id, title, spec, updatedAt }.
+     ============================================================ */
+  const DB_NAME = 'sheetgenie';
+  const STORE = 'sheets';
+
+  function idb() {
+    return new Promise((resolve, reject) => {
+      const r = indexedDB.open(DB_NAME, 1);
+      r.onupgradeneeded = () => { r.result.createObjectStore(STORE, { keyPath: 'id' }); };
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+  }
+  function idbDo(mode, fn) {
+    return idb().then((db) => new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, mode);
+      const rq = fn(tx.objectStore(STORE));
+      let out;
+      if (rq) rq.onsuccess = () => { out = rq.result; };
+      tx.oncomplete = () => resolve(out);
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    }));
+  }
+  const libPut = (rec) => idbDo('readwrite', (s) => s.put(rec));
+  const libAll = () => idbDo('readonly', (s) => s.getAll());
+  const libGet = (id) => idbDo('readonly', (s) => s.get(id));
+  const libDel = (id) => idbDo('readwrite', (s) => s.delete(id));
+
+  function genId() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  }
+
+  async function saveCurrentToLibrary(announce) {
+    if (!currentSpec) return;
+    try {
+      if (!currentLibId) currentLibId = genId();
+      await libPut({ id: currentLibId, title: currentSpec.title || 'Spreadsheet', spec: currentSpec, updatedAt: Date.now() });
+      await refreshLibrary();
+      if (announce) showOk('Saved to your library.');
+    } catch (_) {
+      showError('Could not save to the library on this device.');
+    }
+  }
+
+  async function refreshLibrary() {
+    let items = [];
+    try { items = await libAll(); } catch (_) { items = []; }
+    items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    libCount.textContent = String(items.length);
+    libCount.hidden = items.length === 0;
+    renderLibList(items);
+  }
+
+  function renderLibList(items) {
+    libList.replaceChildren();
+    libEmpty.hidden = items.length > 0;
+    items.forEach((rec) => {
+      const info = el('div', { class: 'lib-info' }, [
+        el('span', { class: 'lib-name', text: rec.title || 'Spreadsheet' }),
+        el('span', { class: 'lib-meta', text: libMeta(rec) }),
+      ]);
+      const openB = el('button', { class: 'lib-act', attrs: { type: 'button' }, text: 'Open' });
+      openB.addEventListener('click', () => openFromLibrary(rec.id));
+      const dlB = el('button', { class: 'lib-act', attrs: { type: 'button' }, text: 'Download' });
+      dlB.addEventListener('click', () => generateAndDownload(rec.spec, dlB));
+      const delB = el('button', { class: 'lib-act lib-del', attrs: { type: 'button', 'aria-label': 'Delete ' + (rec.title || 'spreadsheet') }, text: 'Delete' });
+      delB.addEventListener('click', async () => {
+        try { await libDel(rec.id); } catch (_) {}
+        if (currentLibId === rec.id) currentLibId = null;
+        refreshLibrary();
+      });
+      const acts = el('div', { class: 'lib-acts' }, [openB, dlB, delB]);
+      libList.appendChild(el('li', { class: 'lib-item' }, [info, acts]));
+    });
+  }
+
+  function libMeta(rec) {
+    const n = Array.isArray(rec.spec && rec.spec.sheets) ? rec.spec.sheets.length : 0;
+    const when = rec.updatedAt ? new Date(rec.updatedAt).toLocaleDateString() : '';
+    return (n + (n === 1 ? ' sheet' : ' sheets')) + (when ? ' · ' + when : '');
+  }
+
+  async function openFromLibrary(id) {
+    let rec = null;
+    try { rec = await libGet(id); } catch (_) {}
+    if (!rec || !rec.spec) { showError('Could not open that spreadsheet.'); return; }
+    currentSpec = rec.spec;
+    currentLibId = rec.id;
+    downloadBtn.disabled = false;
+    saveLibBtn.disabled = false;
+    enterEditMode(rec.spec, rec.title);
+    renderResults({
+      improvedPrompt: null,
+      notes: 'Loaded “' + (rec.title || 'spreadsheet') + '”. Describe a change or add data above and tap Apply changes — or just Download.',
+      spec: rec.spec,
+    });
+    setLibraryOpen(false);
+    const cap = document.querySelector('.capture');
+    if (cap) cap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function enterEditMode(spec, title) {
+    if (!spec) return;
+    baseSpec = spec;
+    editTitle.textContent = title || 'this spreadsheet';
+    editBanner.hidden = false;
+    promptEl.placeholder = 'What should I change? e.g. add a Tax column, sort by date, append the new data';
+    refreshPrimaryLabel();  // primary button becomes "Apply changes"
+    promptEl.focus();
+  }
+
+  function newSpreadsheet() {
+    baseSpec = null;
+    currentLibId = null;
+    currentSpec = null;
+    editBanner.hidden = true;
+    promptEl.placeholder = PROMPT_PLACEHOLDER;
+    promptEl.value = '';
+    dataInput.value = '';
+    attachments = [];
+    renderAttachments();
+    updateDataBadge();
+    resultsEl.replaceChildren();
+    downloadBtn.disabled = true;
+    saveLibBtn.disabled = true;
+    setBusy(false);
+    autosize();
+    promptEl.focus();
+  }
+
+  function setLibraryOpen(open) {
+    librarySection.hidden = !open;
+    libraryToggle.setAttribute('aria-expanded', String(open));
+  }
+  libraryToggle.addEventListener('click', async () => {
+    const show = librarySection.hidden;
+    if (show) await refreshLibrary();
+    setLibraryOpen(show);
+    if (show) librarySection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  libraryClose.addEventListener('click', () => setLibraryOpen(false));
+  saveLibBtn.addEventListener('click', () => saveCurrentToLibrary(true));
+  newSheetBtn.addEventListener('click', newSpreadsheet);
+
+  refreshLibrary();
 
   /* ============================================================
      Register the service worker (PWA / offline shell).

@@ -351,7 +351,11 @@ def test_improve():
     _drive(imp, json.dumps({"prompt": "sales report",
                             "clarifications": [{"question": "Period?", "answer": "Q1 2026"}]}).encode(),
            env={"ANTHROPIC_API_KEY": "sk-ant-test"})
-    umsg = (seen2.get("messages") or [{}])[0].get("content", "")
+    cont2 = (seen2.get("messages") or [{}])[0].get("content")
+    if isinstance(cont2, list):
+        umsg = next((b.get("text", "") for b in cont2 if isinstance(b, dict) and b.get("type") == "text"), "")
+    else:
+        umsg = cont2 or ""
     check("clarifications: folded into the user message",
           "Answers to your questions" in umsg and "Q1 2026" in umsg)
 
@@ -363,6 +367,82 @@ def test_improve():
                                env={"ANTHROPIC_API_KEY": "sk-ant-test"})
     check("needs_input: 200 passthrough with status", status == 200 and parsed.get("status") == "needs_input")
     check("needs_input: questions present", isinstance(parsed.get("questions"), list) and len(parsed["questions"]) == 1)
+
+    # --- attachments: file -> content blocks ---
+    img_b64 = "aGVsbG8="  # dummy base64
+    blocks = imp._build_file_blocks([{"type": "image", "media_type": "image/jpeg", "data": img_b64, "name": "x.jpg"}])
+    check("files: image -> image block",
+          len(blocks) == 1 and blocks[0]["type"] == "image"
+          and blocks[0]["source"]["media_type"] == "image/jpeg" and blocks[0]["source"]["data"] == img_b64)
+    pblocks = imp._build_file_blocks([{"type": "pdf", "media_type": "application/pdf", "data": img_b64}])
+    check("files: pdf -> document block",
+          len(pblocks) == 1 and pblocks[0]["type"] == "document"
+          and pblocks[0]["source"]["media_type"] == "application/pdf")
+    check("files: none -> empty list", imp._build_file_blocks(None) == [])
+
+    def rejects_files(label, files):
+        try:
+            imp._build_file_blocks(files)
+            check(label + " (should reject)", False)
+        except imp._InputError:
+            check(label, True)
+
+    rejects_files("files: reject too many", [{"type": "image", "media_type": "image/png", "data": "x"}] * (imp.MAX_FILES + 1))
+    rejects_files("files: reject bad image type", [{"type": "image", "media_type": "image/tiff", "data": "x"}])
+    rejects_files("files: reject pdf with image type", [{"type": "pdf", "media_type": "image/png", "data": "x"}])
+    rejects_files("files: reject unknown kind", [{"type": "video", "media_type": "video/mp4", "data": "x"}])
+    rejects_files("files: reject empty data", [{"type": "image", "media_type": "image/png", "data": ""}])
+    rejects_files("files: reject oversized", [{"type": "image", "media_type": "image/png", "data": "a" * (imp.MAX_FILE_B64 + 1)}])
+
+    # integration: attachments reach the model as content blocks (text + image)
+    seen3 = {}
+
+    def cap3(kw, n, R, ns):
+        seen3.update(kw)
+        return R(json.dumps(CANNED))
+
+    imp.anthropic = _fake_anthropic(cap3)
+    _drive(imp, json.dumps({"prompt": "expenses from this receipt",
+                            "files": [{"type": "image", "media_type": "image/jpeg", "data": img_b64, "name": "r.jpg"}]}).encode(),
+           env={"ANTHROPIC_API_KEY": "sk-ant-test"})
+    cont = (seen3.get("messages") or [{}])[0].get("content")
+    has_text = isinstance(cont, list) and any(isinstance(b, dict) and b.get("type") == "text" for b in cont)
+    has_img = isinstance(cont, list) and any(isinstance(b, dict) and b.get("type") == "image" for b in cont)
+    check("files: message content is blocks with text + image", has_text and has_img)
+
+    # baseSpec (edit mode) is folded into the user message as an edit instruction
+    seen4 = {}
+
+    def cap4(kw, n, R, ns):
+        seen4.update(kw)
+        return R(json.dumps(CANNED))
+
+    imp.anthropic = _fake_anthropic(cap4)
+    _drive(imp, json.dumps({"prompt": "add a Tax column",
+                            "baseSpec": {"title": "T", "sheets": [{"name": "S",
+                                         "columns": [{"header": "A", "type": "text"}]}]}}).encode(),
+           env={"ANTHROPIC_API_KEY": "sk-ant-test"})
+    cont4 = (seen4.get("messages") or [{}])[0].get("content")
+    etext = (next((b.get("text", "") for b in cont4 if isinstance(b, dict) and b.get("type") == "text"), "")
+             if isinstance(cont4, list) else (cont4 or ""))
+    check("baseSpec: folded into the user message as an edit instruction",
+          "CURRENT SPREADSHEET to edit" in etext and "add a Tax column" in etext)
+
+    # baseSpec with an empty sheets list is still treated as an edit (framing present)
+    seen5 = {}
+
+    def cap5(kw, n, R, ns):
+        seen5.update(kw)
+        return R(json.dumps(CANNED))
+
+    imp.anthropic = _fake_anthropic(cap5)
+    _drive(imp, json.dumps({"prompt": "add a column", "baseSpec": {"title": "T", "sheets": []}}).encode(),
+           env={"ANTHROPIC_API_KEY": "sk-ant-test"})
+    cont5 = (seen5.get("messages") or [{}])[0].get("content")
+    etext5 = (next((b.get("text", "") for b in cont5 if isinstance(b, dict) and b.get("type") == "text"), "")
+              if isinstance(cont5, list) else (cont5 or ""))
+    check("baseSpec: empty-sheets spec still framed as an edit",
+          "CURRENT SPREADSHEET to edit" in etext5)
 
 
 if __name__ == "__main__":
