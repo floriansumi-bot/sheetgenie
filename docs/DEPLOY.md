@@ -37,8 +37,10 @@ git push -u origin main
 3. Framework Preset: **Other** (it's a static site + Python functions — no build needed).
 4. Expand **Environment Variables** and add:
    - `ANTHROPIC_API_KEY` = the `sk-ant-...` key from Part A
-   - `MODEL` = `claude-fable-5`  *(optional; the default — most capable. If your key
-     can't access Fable, the app auto-falls back to `claude-opus-4-8`, then `claude-sonnet-4-6`.)*
+   - `MODEL` = `claude-opus-4-8`  *(recommended for a new key — Fable 5 access is
+     often not enabled on a fresh account, and the app would waste a round-trip
+     failing over to Opus on every request. Set `claude-fable-5` instead once your
+     account has Fable; it then auto-falls back to Opus 4.8 → Sonnet 4.6 anyway.)*
    - `EFFORT` = `high`  *(optional; `low`/`medium`/`high`/`max` — lower = cheaper & faster)*
 5. Click **Deploy**. After ~1 min you get a live URL like `https://sheetgenie.vercel.app`.
 6. (Optional) **Settings → Domains** to attach a custom domain for your portfolio.
