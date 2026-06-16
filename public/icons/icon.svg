@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="SheetGenie icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e1b2e"/>
+      <stop offset="1" stop-color="#0f0e17"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#6366f1"/>
+    </linearGradient>
+  </defs>
+  <!-- maskable-safe: keep key art within the central 80% safe zone -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <!-- spreadsheet grid -->
+  <g transform="translate(112 120)">
+    <rect x="0" y="0" width="232" height="272" rx="20" fill="none" stroke="#3b3a52" stroke-width="10"/>
+    <!-- header row -->
+    <rect x="10" y="10" width="212" height="46" rx="10" fill="url(#accent)" opacity="0.9"/>
+    <!-- vertical dividers -->
+    <line x1="87" y1="56" x2="87" y2="262" stroke="#3b3a52" stroke-width="8"/>
+    <line x1="155" y1="56" x2="155" y2="262" stroke="#3b3a52" stroke-width="8"/>
+    <!-- horizontal dividers -->
+    <line x1="10" y1="110" x2="222" y2="110" stroke="#3b3a52" stroke-width="8"/>
+    <line x1="10" y1="164" x2="222" y2="164" stroke="#3b3a52" stroke-width="8"/>
+    <line x1="10" y1="218" x2="222" y2="218" stroke="#3b3a52" stroke-width="8"/>
+  </g>
+  <!-- violet sparkle -->
+  <g transform="translate(330 300)">
+    <path d="M48 0 C54 30 66 42 96 48 C66 54 54 66 48 96 C42 66 30 54 0 48 C30 42 42 30 48 0 Z" fill="url(#accent)"/>
+    <path d="M112 96 C115 110 121 116 135 119 C121 122 115 128 112 142 C109 128 103 122 89 119 C103 116 109 110 112 96 Z" fill="#a78bfa"/>
+  </g>
+</svg>

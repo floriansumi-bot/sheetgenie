@@ -1,0 +1,5 @@
+# Python deps for the Vercel serverless functions in /api.
+# Pinned to the versions verified locally during QA (see docs/DEPLOY.md).
+# anthropic 0.109.2 exposes output_config (structured outputs) + adaptive thinking.
+anthropic==0.109.2
+openpyxl==3.1.5

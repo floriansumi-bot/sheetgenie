@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="Speak or type what you need and get a real Excel spreadsheet.">
+  <meta name="theme-color" content="#0f0e17" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f6f5f2" media="(prefers-color-scheme: light)">
+  <title>SheetGenie — Speak or type, get a real Excel spreadsheet</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#prompt">Skip to prompt</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 48 48" width="32" height="32" focusable="false">
+          <defs>
+            <linearGradient id="mk" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#8b5cf6"/>
+              <stop offset="1" stop-color="#6366f1"/>
+            </linearGradient>
+          </defs>
+          <rect x="4" y="6" width="28" height="34" rx="5" fill="none" stroke="currentColor" stroke-width="2.5" opacity="0.55"/>
+          <rect x="7" y="9" width="22" height="6" rx="2" fill="url(#mk)"/>
+          <line x1="18" y1="15" x2="18" y2="37" stroke="currentColor" stroke-width="2" opacity="0.4"/>
+          <line x1="7" y1="24" x2="29" y2="24" stroke="currentColor" stroke-width="2" opacity="0.4"/>
+          <path d="M37 22 c1.4 5 3 6.6 8 8 c-5 1.4-6.6 3-8 8 c-1.4-5-3-6.6-8-8 c5-1.4 6.6-3 8-8 Z" fill="url(#mk)"/>
+        </svg>
+      </span>
+      <span class="brand-name">SheetGenie</span>
+    </div>
+    <button id="themeToggle" class="theme-toggle" type="button" aria-label="Toggle light or dark theme" title="Toggle theme">
+      <span class="theme-icon" aria-hidden="true">◐</span>
+    </button>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <h1>Speak or type. <span class="accent">Get a spreadsheet.</span></h1>
+      <p class="tagline">Speak or type what you need - get a real Excel spreadsheet.</p>
+    </section>
+
+    <section class="card capture" aria-labelledby="capture-h">
+      <h2 id="capture-h" class="sr-only">Describe your spreadsheet</h2>
+
+      <div class="prompt-row">
+        <label class="sr-only" for="prompt">What spreadsheet do you need?</label>
+        <textarea id="prompt" class="prompt" rows="3"
+          placeholder="e.g. A monthly budget tracker with categories, budgeted vs actual, and a bar chart"></textarea>
+        <button id="mic" class="mic" type="button" aria-pressed="false" aria-label="Dictate with your voice" title="Dictate">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+            <path fill="currentColor" d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Z"/>
+            <path fill="currentColor" d="M19 11a1 1 0 1 0-2 0 5 5 0 0 1-10 0 1 1 0 1 0-2 0 7 7 0 0 0 6 6.92V21h-2a1 1 0 1 0 0 2h6a1 1 0 1 0 0-2h-2v-3.08A7 7 0 0 0 19 11Z"/>
+          </svg>
+        </button>
+      </div>
+      <p id="micHint" class="mic-hint" hidden>Voice not supported on this browser - type instead.</p>
+
+      <button id="dataToggle" class="data-toggle" type="button" aria-expanded="false" aria-controls="dataPanel">
+        <span class="chev" aria-hidden="true">▸</span>
+        <span>I have data to fill in</span>
+        <span id="dataBadge" class="data-badge" hidden>added</span>
+      </button>
+      <div id="dataPanel" class="data-panel" hidden>
+        <label class="sr-only" for="data">Paste your data (CSV, TSV, or one item per line)</label>
+        <textarea id="data" class="data-input" rows="5"
+          placeholder="Paste rows here — CSV, TSV, or one item per line.&#10;Category,Budgeted,Actual&#10;Rent,1500,1500"></textarea>
+      </div>
+
+      <div class="actions">
+        <button id="improve" class="btn btn-primary" type="button">
+          <span class="btn-label">Improve &amp; preview</span>
+          <span class="shimmer" aria-hidden="true"></span>
+        </button>
+        <button id="download" class="btn btn-secondary" type="button" disabled>Download .xlsx</button>
+      </div>
+    </section>
+
+    <div id="toast" class="toast" role="alert" aria-live="assertive" hidden></div>
+
+    <section id="results" class="results" aria-live="polite"></section>
+  </main>
+
+  <footer class="footer">
+    <p>Built with SheetGenie. Your file is generated on demand.</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
