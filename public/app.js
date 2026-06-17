@@ -470,6 +470,7 @@
   let pendingData = null;
   let pendingFiles = [];
   let pendingBaseSpec = null;
+  let pendingClarifications = null;   // answers in play, so a layout pick can resend them
 
   function onImprove() {
     if (busy) return;
@@ -496,10 +497,12 @@
 
   // Calls /api/improve. `clarifications` is null on the first pass, or an array of
   // {question, answer} once the user has answered the model's questions.
-  async function runImprove(clarifications) {
+  // `chosenLayout` is set when the user picks one of the proposed layouts.
+  async function runImprove(clarifications, chosenLayout) {
     if (busy) return;
     clearError();
     setBusy(true);
+    pendingClarifications = clarifications || null;
     // A fresh request invalidates any prior spec. An EDIT keeps the base spec so a
     // failed "Apply changes" leaves the loaded file intact and still downloadable.
     if (!pendingBaseSpec) {
@@ -514,6 +517,7 @@
       baseSpec: pendingBaseSpec || null,
       files: pendingFiles.length ? pendingFiles : null,
       clarifications: clarifications || null,
+      chosenLayout: chosenLayout || null,
       locale: (navigator.language || ''),
     };
 
@@ -561,6 +565,13 @@
     if (payload.status === 'needs_input' &&
         Array.isArray(payload.questions) && payload.questions.length) {
       renderQuestions(payload);
+      resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    // "layouts": the model proposed a few structures — let the user pick one to build.
+    if (payload.status === 'layouts' &&
+        Array.isArray(payload.layouts) && payload.layouts.length) {
+      renderLayouts(payload);
       resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
       return;
     }
@@ -629,6 +640,58 @@
     card.appendChild(el('div', { class: 'q-actions' }, [cont]));
     resultsEl.appendChild(card);
     if (fields[0]) fields[0].input.focus();
+  }
+
+  // Render the 2-3 proposed layouts as choosable cards. Picking one re-runs improve
+  // with that layout (and any answers already given) to build the full spec.
+  function renderLayouts(payload) {
+    resultsEl.replaceChildren();
+
+    const wrap = el('div', { class: 'layouts-card' });
+    wrap.appendChild(el('p', { class: 'eyebrow', text: 'Pick a layout' }));
+    wrap.appendChild(el('p', {
+      class: 'notes',
+      text: payload.notes || 'A few ways to organise this — pick the one you like and I’ll build it.',
+    }));
+
+    const grid = el('div', { class: 'layouts-grid' });
+    payload.layouts.slice(0, 3).forEach((lay, i) => {
+      const card = el('div', { class: 'layout-card' });
+      card.appendChild(el('h3', { class: 'layout-title', text: (lay && lay.title) ? lay.title : ('Layout ' + (i + 1)) }));
+      if (lay && lay.summary) card.appendChild(el('p', { class: 'layout-summary', text: lay.summary }));
+
+      const sheets = Array.isArray(lay && lay.sheets) ? lay.sheets : [];
+      sheets.forEach((sh) => {
+        const box = el('div', { class: 'layout-sheet' });
+        box.appendChild(el('span', { class: 'layout-sheet-name', text: (sh && sh.name) ? sh.name : 'Sheet' }));
+        const cols = el('div', { class: 'layout-cols' });
+        (Array.isArray(sh && sh.columns) ? sh.columns : []).forEach((c) => {
+          cols.appendChild(el('span', { class: 'layout-col', text: String(c) }));
+        });
+        box.appendChild(cols);
+        card.appendChild(box);
+      });
+
+      const pick = el('button', { class: 'btn btn-primary layout-pick', attrs: { type: 'button' }, text: 'Build this layout →' });
+      pick.addEventListener('click', async () => {
+        const allPicks = resultsEl.querySelectorAll('.layout-pick');
+        allPicks.forEach((b) => { b.disabled = true; });
+        card.classList.add('chosen');
+        const label = pick.textContent;
+        pick.textContent = 'Building…';
+        await runImprove(pendingClarifications, lay);
+        if (pick.isConnected) {
+          allPicks.forEach((b) => { b.disabled = false; });
+          card.classList.remove('chosen');
+          pick.textContent = label;
+        }
+      });
+      card.appendChild(pick);
+      grid.appendChild(card);
+    });
+
+    wrap.appendChild(grid);
+    resultsEl.appendChild(wrap);
   }
 
   /* ============================================================

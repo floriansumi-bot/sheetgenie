@@ -423,6 +423,38 @@ table.preview .more-row td {
 .q-actions { margin-top: 16px; display: flex; gap: 12px; }
 .q-actions .btn { flex: 0 1 auto; min-width: 160px; }
 
+/* ---------- layout chooser (pick a structure) ---------- */
+.layouts-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 4px solid var(--accent-2); border-radius: var(--radius);
+  padding: 18px 18px 20px; box-shadow: var(--shadow);
+}
+.layouts-card .eyebrow {
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--accent-text); margin: 0 0 6px;
+}
+.layouts-card .notes { margin: 0 0 16px; color: var(--text-dim); font-size: 0.95rem; }
+.layouts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.layout-card {
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 15px;
+  transition: border-color var(--t), box-shadow var(--t), transform var(--t);
+}
+.layout-card:hover { border-color: var(--accent-1); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+.layout-card.chosen { border-color: var(--accent-1); box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.3); }
+.layout-title { margin: 0; font-size: 1.05rem; font-weight: 800; letter-spacing: -0.01em; }
+.layout-summary { margin: 0; color: var(--text-dim); font-size: 0.9rem; }
+.layout-sheet { margin-top: 4px; }
+.layout-sheet-name { font-size: 0.8rem; font-weight: 700; color: var(--text); }
+.layout-cols { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.layout-col {
+  font-size: 0.74rem; color: var(--text-dim);
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 999px; padding: 3px 9px;
+}
+.layout-pick { margin-top: auto; }
+
 /* ---------- attachments (upload / camera) ---------- */
 .attach-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .attach-btn {

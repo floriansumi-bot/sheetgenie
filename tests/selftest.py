@@ -371,6 +371,22 @@ def test_improve():
     check("baseSpec: empty-sheets spec still framed as an edit",
           "CURRENT SPREADSHEET to edit" in store.get("user_text", ""))
 
+    # chosenLayout (the user picked a proposed layout) folded in as a build instruction
+    store = {}
+    imp._generate = gen_returns(json.dumps(CANNED), store)
+    _drive(imp, json.dumps({"prompt": "a budget",
+                            "chosenLayout": {"title": "Monthly Tabs",
+                                             "sheets": [{"name": "January", "columns": ["Item", "Amount"]}]}}).encode())
+    check("chosenLayout: folded into the user message as a build instruction",
+          "CHOSEN LAYOUT" in store.get("user_text", "") and "Monthly Tabs" in store.get("user_text", ""))
+
+    # chosenLayout without a sheets array is ignored (no build instruction injected)
+    store = {}
+    imp._generate = gen_returns(json.dumps(CANNED), store)
+    _drive(imp, json.dumps({"prompt": "a budget", "chosenLayout": {"title": "Bad"}}).encode())
+    check("chosenLayout: malformed (no sheets) is ignored",
+          "CHOSEN LAYOUT" not in store.get("user_text", ""))
+
     # locale folded in (for local-currency recommendations)
     store = {}
     imp._generate = gen_returns(json.dumps(CANNED), store)

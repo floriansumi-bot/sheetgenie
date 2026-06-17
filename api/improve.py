@@ -253,7 +253,23 @@ figure(s), their date, and the source. NEVER invent a live figure — if you can
 verify it, say so in "notes". Do NOT search for ordinary template or sample-data \
 requests.
 
-STEP 2 — WHEN YOU CAN BUILD, set status = "ready" and return exactly these three:
+STEP 2 — OFFER LAYOUTS (fresh builds only). Once the request is clear enough to \
+build (no clarifying questions needed), you are NOT editing an existing spreadsheet, \
+and NO chosen layout is provided below, do NOT build the full workbook yet. Instead \
+propose 2 or 3 genuinely DISTINCT ways to organise it — different STRUCTURES, not \
+cosmetic variants (e.g. one flat sheet vs. several linked sheets; a summary-first \
+dashboard vs. detail-first log; different column groupings or pivots of the same data). \
+Set: status = "layouts"; notes = one friendly line inviting the user to pick one; \
+layouts = an array of 2-3 items, each {"title": short name (2-4 words), "summary": \
+one plain sentence on how it is organised and who it suits, "sheets": [{"name": sheet \
+name, "columns": [column header strings ONLY]}]}. Give column HEADER NAMES only — NO \
+rows, NO data, NO formulas, NO spec. Keep each layout's structure realistic and \
+buildable. Do NOT ask questions here (that was STEP 1).
+
+STEP 3 — BUILD. When a CHOSEN LAYOUT is provided below, OR you are editing an existing \
+spreadsheet, build the full workbook now: set status = "ready" and return exactly these \
+three (when a chosen layout is given, follow ITS sheet names and column headers — you \
+may refine types/formulas and add the data):
 
 1. improvedPrompt — a clear, specific restatement of the workbook to build. \
 Name the sheets, the columns, the kinds of data, and any calculations or charts. \
@@ -364,9 +380,11 @@ Keep the spec minimal and explicit: the renderer does exactly what the spec \
 says and nothing more. Prefer clarity and correctness over cleverness.
 
 OUTPUT FORMAT — respond with EXACTLY ONE JSON object and NOTHING else: no markdown, \
-no code fences, no text before or after. Shape: {"status": "ready" | "needs_input", \
-"notes": string, "improvedPrompt": string (ready only), "spec": <SpreadsheetSpec> \
-(ready only), "questions": [{"question": string, "hint": string}] (needs_input only)}."""
+no code fences, no text before or after. Shape: {"status": "ready" | "needs_input" | \
+"layouts", "notes": string, "improvedPrompt": string (ready only), "spec": \
+<SpreadsheetSpec> (ready only), "questions": [{"question": string, "hint": string}] \
+(needs_input only), "layouts": [{"title": string, "summary": string, "sheets": \
+[{"name": string, "columns": [string]}]}] (layouts only)}."""
 
 
 # ---------------------------------------------------------------------------
@@ -749,6 +767,18 @@ class handler(BaseHTTPRequestHandler):
                     "\n\nCURRENT SPREADSHEET to edit — apply the request to THIS and "
                     "return the COMPLETE updated spec (keep existing data and columns "
                     "unless the request says to change them):\n" + json.dumps(base_spec)
+                )
+
+            # The user picked one of the layouts we proposed — build it in full now
+            # (status "ready"), following its sheet names and column headers.
+            chosen_layout = payload.get("chosenLayout")
+            if isinstance(chosen_layout, dict) and isinstance(chosen_layout.get("sheets"), list):
+                user_text += (
+                    "\n\nCHOSEN LAYOUT — the user picked this structure. Build the FULL "
+                    "spreadsheet for EXACTLY this layout now (status \"ready\"): keep these "
+                    "sheet names and column headers, choose sensible column types/formulas, "
+                    "and fill in realistic rows (or leave empty if a blank template was "
+                    "asked for):\n" + json.dumps(chosen_layout)
                 )
 
             if isinstance(data, str) and data.strip():
