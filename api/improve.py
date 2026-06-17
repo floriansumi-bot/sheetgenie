@@ -239,11 +239,11 @@ table, and surfaces the result.) In that case set:
 details; questions = 1 to 4 SHORT, plain-language questions, each answerable in a \
 few words, each with a helpful "hint" example. Do NOT include a spec.
 PREFER sensible defaults over asking — most clear requests need NO questions, so \
-just build. Never ask more than 4 questions, and never ask about cosmetic \
-formatting trivia.
+do NOT ask: go straight to STEP 2 and propose layouts. Never ask more than 4 \
+questions, and never ask about cosmetic formatting trivia.
 IMPORTANT: if the user has ALREADY answered questions (they appear below under \
 "Answers to your questions"), do NOT ask again — make reasonable assumptions and \
-BUILD with status = "ready".
+proceed to STEP 2 (propose layouts).
 
 LIVE DATA — you can search the web. If the request needs CURRENT real-world values \
 (stock / crypto prices, exchange or interest rates, weather, recent statistics, or \
@@ -253,9 +253,10 @@ figure(s), their date, and the source. NEVER invent a live figure — if you can
 verify it, say so in "notes". Do NOT search for ordinary template or sample-data \
 requests.
 
-STEP 2 — OFFER LAYOUTS (fresh builds only). Once the request is clear enough to \
-build (no clarifying questions needed), you are NOT editing an existing spreadsheet, \
-and NO chosen layout is provided below, do NOT build the full workbook yet. Instead \
+STEP 2 — OFFER LAYOUTS (fresh builds only). REQUIRED: whenever the request is clear \
+enough to build, you are NOT editing an existing spreadsheet, and NO "CHOSEN LAYOUT" \
+is provided below, you MUST respond with status = "layouts" — do NOT build the full \
+workbook yet and do NOT return status = "ready" on this turn. Instead \
 propose 2 or 3 genuinely DISTINCT ways to organise it — different STRUCTURES, not \
 cosmetic variants (e.g. one flat sheet vs. several linked sheets; a summary-first \
 dashboard vs. detail-first log; different column groupings or pivots of the same data). \
