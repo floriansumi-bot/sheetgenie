@@ -17,8 +17,8 @@ Works on Android, iPhone, PC, and Mac from one codebase, installable as a PWA.
                  │        [Improve] ─┼──── POST /api/improve ─────────────┐             │
                  │                  │                                     ▼             │
                  │   shows improved prompt + editable preview      ┌─────────────┐      │
-                 │                  │                              │ /api/improve │──▶ Anthropic API
-                 │        [Generate] ┼──── POST /api/generate ◀── spec ┘ (Fable 5)    │
+                 │                  │                              │ /api/improve │──▶ Gemini → Grok
+                 │        [Generate] ┼──── POST /api/generate ◀── spec ┘ (Gemini)     │
                  │                  ▼                              returns improvedPrompt│
                  │            downloads .xlsx ◀── binary ── ┌──────────────┐  + spec     │
                  │                                          │ /api/generate │ (openpyxl) │
@@ -26,7 +26,7 @@ Works on Android, iPhone, PC, and Mac from one codebase, installable as a PWA.
 ```
 
 1. **Capture** — user types or dictates a prompt; may paste tabular data.
-2. **Improve** (`/api/improve`) — the Anthropic API returns one of two things: a few
+2. **Improve** (`/api/improve`) — the AI provider (Gemini, then Grok) returns one of two things: a few
    short **clarifying questions** (when the request is genuinely ambiguous), or, when it
    has enough to go on, `{ status: "ready", improvedPrompt, notes, spec }`. If it asks,
    the user answers inline and the app re-calls `/api/improve` with those answers folded
@@ -35,21 +35,21 @@ Works on Android, iPhone, PC, and Mac from one codebase, installable as a PWA.
 3. **Generate** (`/api/generate`) — openpyxl renders the spec to `.xlsx`, deterministic
    and free (no AI, no network). Streams back as a download.
 
-Splitting "improve" (the paid AI step) from "generate" (free, deterministic) means
-the expensive step runs once and the file build is instant and reproducible.
+Splitting "improve" (the AI step) from "generate" (free, deterministic) means the AI
+step runs once and the file build is instant and reproducible.
 
 ## Stack & why
 | Layer    | Choice | Why |
 |----------|--------|-----|
 | Frontend | Vanilla JS + CSS, PWA | No build step, installable everywhere, easy for the owner to maintain, fast |
 | Voice    | Web Speech API (`webkitSpeechRecognition` fallback) | Native, free; works Chrome/Android + iOS Safari 14.5+; typed input always present |
-| AI       | Anthropic API, `claude-fable-5` → Opus 4.8 fallback (env-swappable) | Most capable model for best-quality specs; adaptive thinking + high effort; auto-falls back if the key lacks Fable access |
+| AI       | Google Gemini (free) → xAI Grok fallback (env `PROVIDERS`) | Free primary (multimodal: image + PDF; Google-Search grounding), paid fallback for resilience; JSON envelope parsed defensively |
 | Backend  | Vercel Python serverless (`BaseHTTPRequestHandler`) | Always-on, free Hobby tier, real Excel charts via openpyxl, key stays server-side |
 | Excel    | openpyxl | Native `.xlsx` with bar/line/pie charts, formulas, formatting |
 | Hosting  | Vercel | 24/7, auto-deploy from GitHub, custom domain, env-var secret storage |
 
 ## Security posture
-- `ANTHROPIC_API_KEY` lives only in Vercel env vars / local `.env` — never shipped to the browser, never committed (`.gitignore`).
+- `GEMINI_API_KEY` / `XAI_API_KEY` live only in Vercel env vars / local `.env` — never shipped to the browser, never committed (`.gitignore`).
 - `/api/generate` runs no AI and makes no outbound calls — it cannot leak anything.
 - Error messages are sanitized; raw stack traces and the key are never returned to the client.
 - Input limits in [SPEC.md](SPEC.md) bound spec size to prevent resource abuse.

@@ -4,14 +4,14 @@ Plain-language steps. You do not need to be a developer — follow in order.
 
 ---
 
-## Part A — Get your Anthropic API key (one time, ~3 min)
-1. Go to **https://console.anthropic.com** and sign in (create an account if needed).
-2. Add a payment method under **Billing**. With the default **Fable 5** model expect
-   roughly a few cents up to ~40¢ per spreadsheet (it's the most capable model). To
-   spend less, set `MODEL=claude-opus-4-8` or lower `EFFORT` in Part C. Set a low
-   monthly spend limit for peace of mind. Your $5 is plenty to demo it.
-3. Open **API Keys → Create Key**, name it `sheetgenie`, and **copy the key**
-   (starts with `sk-ant-`). You will paste it into Vercel in Part C. Keep it secret.
+## Part A — Get your API keys (one time, ~3 min)
+1. **Gemini (free, required)** — go to **https://aistudio.google.com**, click
+   **"Get API key"** (no credit card). Copy the key. This is the primary provider, and
+   its free tier is plenty for portfolio traffic, so the AI step costs nothing.
+2. **Grok / xAI (optional fallback)** — go to **https://x.ai** and create an API key
+   (starts with `xai-`). Only used if Gemini is ever unavailable; xAI needs a little
+   credit, so you can skip it and add it later (the app runs Gemini-only without it).
+3. Keep both keys secret — you'll paste them into Vercel in Part C.
 
 ---
 
@@ -36,12 +36,10 @@ git push -u origin main
 2. **Add New → Project**, import the `sheetgenie` repo.
 3. Framework Preset: **Other** (it's a static site + Python functions — no build needed).
 4. Expand **Environment Variables** and add:
-   - `ANTHROPIC_API_KEY` = the `sk-ant-...` key from Part A
-   - `MODEL` = `claude-opus-4-8`  *(recommended for a new key — Fable 5 access is
-     often not enabled on a fresh account, and the app would waste a round-trip
-     failing over to Opus on every request. Set `claude-fable-5` instead once your
-     account has Fable; it then auto-falls back to Opus 4.8 → Sonnet 4.6 anyway.)*
-   - `EFFORT` = `high`  *(optional; `low`/`medium`/`high`/`max` — lower = cheaper & faster)*
+   - `GEMINI_API_KEY` = your free Gemini key from Part A  *(required — primary provider)*
+   - `XAI_API_KEY` = your `xai-...` key  *(optional — Grok fallback; omit to run Gemini-only)*
+   - `PROVIDERS` = `gemini,grok`  *(optional; use just `gemini` for free-only)*
+   - `WEB_SEARCH` = `on`  *(optional; live data via Gemini grounding — set `off` to disable)*
 5. Click **Deploy**. After ~1 min you get a live URL like `https://sheetgenie.vercel.app`.
 6. (Optional) **Settings → Domains** to attach a custom domain for your portfolio.
 
@@ -73,15 +71,16 @@ then exercise `api/generate.py` with a sample spec (the QA step does this automa
 
 ## Dependencies (already pinned)
 `requirements.txt` is pinned to the exact versions verified during QA
-(`anthropic==0.109.2`, `openpyxl==3.1.5`), so Vercel installs the same ones that were
-tested. No action needed unless you intentionally upgrade.
+(`google-genai==2.8.0`, `openai==2.42.0`, `openpyxl==3.1.5`), so Vercel installs the
+same ones that were tested. No action needed unless you intentionally upgrade.
 
 ---
 
 ## Troubleshooting
 | Symptom | Fix |
 |---------|-----|
-| "Server not configured" / 500 on Improve | `ANTHROPIC_API_KEY` missing or wrong in Vercel env vars → re-add, redeploy |
+| "Server not configured" / 500 on Improve | `GEMINI_API_KEY` (and/or `XAI_API_KEY`) missing or wrong in Vercel env vars → re-add, redeploy |
+| "AI is temporarily unavailable" | Gemini free-tier rate limit hit, or the key is invalid → wait a bit, or check the key / add an `XAI_API_KEY` fallback |
 | Voice button does nothing on iPhone Chrome | iOS Chrome can't do speech (Apple limitation) — use Safari, or just type |
 | Build fails on Vercel about Python deps | Ensure `requirements.txt` is at repo root; redeploy |
 | Charts missing in the file | Check the spec's `valueColumns`/`categoriesColumn` indices are valid (see SPEC.md) |

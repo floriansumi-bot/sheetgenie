@@ -1,14 +1,15 @@
 """POST /api/improve — turn a rough prompt into {improvedPrompt, notes, spec}.
 
 Vercel Python serverless function (native http.server pattern). This is the only
-endpoint that calls the Anthropic API. It returns a validated-shape JSON object
-whose `spec` is a SpreadsheetSpec per docs/SPEC.md; the deterministic
-/api/generate endpoint renders that spec into a real .xlsx.
+endpoint that calls an AI provider — free Google Gemini first, falling back to xAI
+Grok. It returns a validated-shape JSON object whose `spec` is a SpreadsheetSpec per
+docs/SPEC.md; the deterministic /api/generate endpoint renders it into a real .xlsx.
 
 Contract: docs/SPEC.md §1 (HTTP API) and §2 (SpreadsheetSpec) are the single
 source of truth. Keep this file aligned with them.
 """
 
+import base64
 import json
 import os
 import re
@@ -16,7 +17,11 @@ import sys
 import traceback
 from http.server import BaseHTTPRequestHandler
 
-import anthropic
+from google import genai
+from google.genai import errors as gerrors
+from google.genai import types as gtypes
+import openai
+from openai import OpenAI
 
 
 # ---------------------------------------------------------------------------
@@ -368,39 +373,27 @@ no code fences, no text before or after. Shape: {"status": "ready" | "needs_inpu
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Model selection. Default to the most capable model (Fable 5). If the API key
-# cannot access a model (404 not_found / 403 permission), fall back to the next
-# one at runtime — so a key without Fable access still works on Opus 4.8, then
-# Sonnet 4.6. Override the primary via the MODEL env var (a comma-separated list
-# is also accepted). See docs/DEPLOY.md / .env.example.
-def _model_chain():
-    primary = (os.environ.get("MODEL") or "claude-fable-5").strip()
-    chain = [m.strip() for m in primary.split(",") if m.strip()]
-    for fallback in ("claude-opus-4-8", "claude-sonnet-4-6"):
-        if fallback not in chain:
-            chain.append(fallback)
-    return chain or ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6"]
+# Provider chain: free Gemini is primary, Grok (xAI) is the fallback. Reorder or
+# limit via the PROVIDERS env var (comma-separated, e.g. "gemini,grok" or "gemini").
+# Each provider is skipped if its key is missing; on a transient failure we fall
+# through to the next. See docs/DEPLOY.md / .env.example.
+def _provider_chain():
+    raw = (os.environ.get("PROVIDERS") or "gemini,grok").lower()
+    chain = [p.strip() for p in raw.split(",") if p.strip() in ("gemini", "grok")]
+    return chain or ["gemini", "grok"]
 
 
-MODEL_CHAIN = _model_chain()
+PROVIDER_CHAIN = _provider_chain()
 
-# Models that accept adaptive thinking + the effort parameter. Haiku / older
-# Sonnet 4.5 reject these (HTTP 400), so we only send them to supported models.
-_THINKING_MODELS = (
-    "claude-fable-5",
-    "claude-opus-4-8",
-    "claude-opus-4-7",
-    "claude-opus-4-6",
-    "claude-sonnet-4-6",
-)
+# Google Gemini (free tier): multimodal (image + PDF) and Google-Search grounding.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
 
-
-def _supports_thinking(model):
-    return any(model == m or model.startswith(m + "[") for m in _THINKING_MODELS)
-
-
-# Thinking effort: low | medium | high | max. Higher = more reasoning, slower.
-EFFORT = os.environ.get("EFFORT") or "high"
+# xAI Grok (OpenAI-compatible). Default to a vision-capable model so image uploads
+# still work on the fallback path; override via XAI_MODEL.
+XAI_API_KEY = os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY")
+XAI_MODEL = os.environ.get("XAI_MODEL") or "grok-2-vision-1212"
+XAI_BASE_URL = os.environ.get("XAI_BASE_URL") or "https://api.x.ai/v1"
 
 # Output token ceiling. Kept moderate so generation comfortably finishes inside
 # Vercel's 60s function limit; raise via MAX_TOKENS for very large data fills.
@@ -420,16 +413,12 @@ MAX_FILE_B64 = 3_700_000          # per-file base64 length (~2.8 MB)
 MAX_FILES_B64_TOTAL = 3_700_000   # combined base64 length across all attachments
 _IMAGE_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
-# Live web search (Anthropic server tool): lets the model pull CURRENT real-world
-# data (prices, rates, weather, stats) into the spreadsheet. Costs ~$10/1000
-# searches plus the tokens for the results; capped per call. Toggle via WEB_SEARCH.
+# Live web search: lets the model pull CURRENT real-world data (prices, rates,
+# weather, stats) into the spreadsheet — via Gemini's Google-Search grounding
+# (free) or Grok's live search. Toggle via the WEB_SEARCH env var.
 WEB_SEARCH_ENABLED = (os.environ.get("WEB_SEARCH") or "on").strip().lower() not in (
     "off", "0", "false", "no",
 )
-try:
-    WEB_SEARCH_MAX = int(os.environ.get("WEB_SEARCH_MAX") or "5")
-except (TypeError, ValueError):
-    WEB_SEARCH_MAX = 5
 
 _CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
@@ -442,11 +431,10 @@ class _InputError(Exception):
     """Bad client input -> HTTP 400 with a safe, human-readable message."""
 
 
-def _build_file_blocks(files):
-    """Validate request `files` and convert to Anthropic content blocks.
-
-    Images become image blocks; PDFs become document blocks. Raises _InputError
-    (-> 400) on a bad type / media_type / size, or too many attachments.
+def _validate_files(files):
+    """Validate request `files` and return a clean list of attachment dicts
+    {kind, media_type, data} (base64). Each provider converts these to its own
+    format. Raises _InputError (-> 400) on bad type / media_type / size / count.
     """
     if files is None:
         return []
@@ -455,7 +443,7 @@ def _build_file_blocks(files):
     if len(files) > MAX_FILES:
         raise _InputError("Too many attachments (max %d)." % MAX_FILES)
 
-    blocks = []
+    clean = []
     total = 0
     for f in files:
         if not isinstance(f, dict):
@@ -470,24 +458,152 @@ def _build_file_blocks(files):
         total += len(data)
         if total > MAX_FILES_B64_TOTAL:
             raise _InputError("The attachments are too large together. Use fewer or smaller files.")
-
         if kind == "image":
             if media_type not in _IMAGE_MEDIA_TYPES:
                 raise _InputError("Unsupported image type.")
-            blocks.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": media_type, "data": data},
-            })
         elif kind == "pdf":
             if media_type != "application/pdf":
                 raise _InputError("Unsupported document type.")
-            blocks.append({
-                "type": "document",
-                "source": {"type": "base64", "media_type": "application/pdf", "data": data},
-            })
         else:
             raise _InputError("Unsupported attachment type.")
-    return blocks
+        clean.append({"kind": kind, "media_type": media_type, "data": data})
+    return clean
+
+
+class _ProviderError(Exception):
+    """A provider call failed. `reason` is one of:
+    rate_limit | auth | quota | error | no_key."""
+
+    def __init__(self, reason, detail=""):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+def _gemini_reason(exc):
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    msg = str(getattr(exc, "message", "") or exc).lower()
+    if code == 429 or "resource_exhausted" in msg or "quota" in msg or "rate limit" in msg:
+        return "rate_limit"
+    if code in (401, 403) or "permission" in msg or "api key" in msg or "unauthenticated" in msg:
+        return "auth"
+    return "error"
+
+
+def _call_gemini(system, user_text, files):
+    """Call Google Gemini (free tier). Returns the model's text. Raises
+    _ProviderError. Supports images + PDFs and Google-Search grounding."""
+    if not GEMINI_API_KEY:
+        raise _ProviderError("no_key")
+
+    parts = [gtypes.Part(text=user_text)]
+    for f in files:
+        try:
+            raw = base64.b64decode(f["data"])
+        except Exception:  # noqa: BLE001 — skip an undecodable attachment
+            continue
+        parts.append(gtypes.Part.from_bytes(data=raw, mime_type=f["media_type"]))
+
+    cfg = {"system_instruction": system, "max_output_tokens": MAX_TOKENS, "temperature": 0.4}
+    if WEB_SEARCH_ENABLED:
+        cfg["tools"] = [gtypes.Tool(google_search=gtypes.GoogleSearch())]
+    if hasattr(gtypes, "ThinkingConfig"):
+        # Keep the full token budget for the JSON (this is structured output, not a
+        # deep-reasoning task) and stay fast inside Vercel's 60s limit.
+        cfg["thinking_config"] = gtypes.ThinkingConfig(thinking_budget=0)
+
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        resp = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[gtypes.Content(role="user", parts=parts)],
+            config=gtypes.GenerateContentConfig(**cfg),
+        )
+    except gerrors.APIError as exc:
+        raise _ProviderError(_gemini_reason(exc), str(exc)[:200])
+    except Exception as exc:  # noqa: BLE001
+        raise _ProviderError("error", str(exc)[:200])
+
+    text = getattr(resp, "text", None)
+    if not text:
+        try:
+            text = "".join(
+                p.text for c in (resp.candidates or []) for p in (c.content.parts or [])
+                if getattr(p, "text", None)
+            )
+        except Exception:  # noqa: BLE001
+            text = None
+    if not text:
+        raise _ProviderError("error", "empty response")
+    return text
+
+
+def _call_grok(system, user_text, files):
+    """Call xAI Grok (OpenAI-compatible). Returns the model's text. Raises
+    _ProviderError. Sends images inline; PDFs aren't supported by the chat API,
+    so they're noted rather than read."""
+    if not XAI_API_KEY:
+        raise _ProviderError("no_key")
+
+    content = [{"type": "text", "text": user_text}]
+    skipped_pdf = False
+    for f in files:
+        if f["kind"] == "image":
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": "data:%s;base64,%s" % (f["media_type"], f["data"])},
+            })
+        else:
+            skipped_pdf = True
+    if skipped_pdf:
+        content.append({"type": "text", "text": "(A PDF was attached but can't be read on "
+                                                 "this fallback path; use the rest of the input.)"})
+
+    extra_body = {"search_parameters": {"mode": "auto"}} if WEB_SEARCH_ENABLED else None
+    try:
+        client = OpenAI(api_key=XAI_API_KEY, base_url=XAI_BASE_URL)
+        resp = client.chat.completions.create(
+            model=XAI_MODEL,
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": content}],
+            max_tokens=MAX_TOKENS,
+            extra_body=extra_body,
+        )
+    except openai.RateLimitError as exc:
+        raise _ProviderError("rate_limit", str(exc)[:200])
+    except openai.AuthenticationError as exc:
+        raise _ProviderError("auth", str(exc)[:200])
+    except openai.APIError as exc:
+        raise _ProviderError("error", str(exc)[:200])
+    except Exception as exc:  # noqa: BLE001
+        raise _ProviderError("error", str(exc)[:200])
+
+    try:
+        text = resp.choices[0].message.content
+    except Exception:  # noqa: BLE001
+        text = None
+    if not text:
+        raise _ProviderError("error", "empty response")
+    return text
+
+
+def _generate(system, user_text, files):
+    """Try each provider in PROVIDER_CHAIN; return the first text response. Raises
+    _ProviderError with the most actionable reason if every provider fails."""
+    seen = []
+    for provider in PROVIDER_CHAIN:
+        try:
+            if provider == "gemini":
+                return _call_gemini(system, user_text, files)
+            if provider == "grok":
+                return _call_grok(system, user_text, files)
+        except _ProviderError as pe:
+            seen.append(pe.reason)
+            continue
+    for reason in ("auth", "quota", "rate_limit", "error", "no_key"):
+        if reason in seen:
+            raise _ProviderError(reason)
+    raise _ProviderError("error")
 
 
 def _balanced_objects(text):
@@ -610,11 +726,10 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             # --- Check configuration ----------------------------------------
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
-            if not api_key:
+            if not (GEMINI_API_KEY or XAI_API_KEY):
                 self._send_json(
                     500,
-                    {"error": "The server is not configured yet (missing API key)."},
+                    {"error": "The server is not configured yet (no AI provider key)."},
                 )
                 return
 
@@ -662,83 +777,44 @@ class handler(BaseHTTPRequestHandler):
 
             # --- Attachments (images / PDFs) --------------------------------
             try:
-                file_blocks = _build_file_blocks(payload.get("files"))
+                files = _validate_files(payload.get("files"))
             except _InputError as exc:
                 self._send_json(400, {"error": str(exc)})
                 return
-            content = [{"type": "text", "text": user_text}]
-            if file_blocks:
-                content[0]["text"] += (
-                    "\n\nThe data to use is in the attached file(s) below — read "
-                    "them carefully and transcribe the data into the rows."
+            if files:
+                user_text += (
+                    "\n\nThe data to use is in the attached file(s) — read them "
+                    "carefully and transcribe the data into the rows."
                 )
-                content.extend(file_blocks)
 
-            # --- Call the Anthropic API -------------------------------------
-            # The SDK resolves ANTHROPIC_API_KEY from the environment. We never
-            # pass temperature/top_p/top_k (removed on current models -> HTTP 400).
-            # Adaptive thinking + effort are sent only to models that support them
-            # (see _supports_thinking). We walk MODEL_CHAIN and fall back when a
-            # model is unavailable to this key (404 not_found / 403 permission).
-            client = anthropic.Anthropic()
-            resp = None
-            unavailable = None
-            for model in MODEL_CHAIN:
-                # We deliberately do NOT use output_config.format (structured outputs):
-                # the full SpreadsheetSpec compiles to a grammar that exceeds the API's
-                # size limit ("compiled grammar is too large"). The system prompt pins
-                # the exact JSON envelope instead and we parse it defensively below.
-                kwargs = {
-                    "model": model,
-                    "max_tokens": MAX_TOKENS,
-                    "system": SYSTEM_PROMPT,
-                    "messages": [{"role": "user", "content": content}],
-                }
-                if WEB_SEARCH_ENABLED:
-                    kwargs["tools"] = [{
-                        "type": "web_search_20250305",
-                        "name": "web_search",
-                        "max_uses": WEB_SEARCH_MAX,
-                    }]
-                if _supports_thinking(model):
-                    kwargs["thinking"] = {"type": "adaptive"}
-                    kwargs["output_config"] = {"effort": EFFORT}
-                try:
-                    resp = client.messages.create(**kwargs)
-                    break
-                except (anthropic.NotFoundError, anthropic.PermissionDeniedError) as exc:
-                    # This key can't use that model — try the next in the chain.
-                    unavailable = exc
-                    continue
-
-            if resp is None:
-                # No model in the chain was accessible with this key.
-                raise unavailable if unavailable else RuntimeError("no model available")
-
-            # --- Parse the structured response ------------------------------
-            if resp.stop_reason == "max_tokens":
-                self._send_json(
-                    500,
-                    {"error": "That request produced a spreadsheet plan too large "
-                              "to finish. Try a simpler request or less data."},
-                )
+            # --- Call the AI provider (Gemini -> Grok) ----------------------
+            try:
+                text = _generate(SYSTEM_PROMPT, user_text, files)
+            except _ProviderError as pe:
+                traceback.print_exc(file=sys.stderr)
+                if pe.reason == "rate_limit":
+                    self._send_json(
+                        503,
+                        {"error": "The AI is over its usage limit right now "
+                                  "(free-tier rate limit). Please try again in a few minutes."},
+                    )
+                elif pe.reason in ("auth", "quota", "no_key"):
+                    self._send_json(
+                        503,
+                        {"error": "The AI is temporarily unavailable. Please try again "
+                                  "later — your work isn't lost."},
+                    )
+                else:
+                    self._send_json(
+                        500,
+                        {"error": "Something went wrong generating your spreadsheet plan. "
+                                  "Please try again."},
+                    )
                 return
 
-            # The model returns one JSON object (per the OUTPUT FORMAT instruction).
-            # Parse it tolerantly (strip any stray code fence / surrounding prose).
-            # With web search the reply has tool blocks too; the JSON envelope is in
-            # the text block(s). Join them all and let _extract_json find the object.
-            text_parts = [b.text for b in resp.content
-                          if getattr(b, "type", "") == "text" and getattr(b, "text", "")]
-            text = "\n".join(text_parts) if text_parts else None
-            if not text:
-                self._send_json(
-                    500,
-                    {"error": "The model did not return a spreadsheet plan. "
-                              "Please try again."},
-                )
-                return
-
+            # --- Parse the JSON envelope ------------------------------------
+            # The model returns one JSON object (per the OUTPUT FORMAT instruction);
+            # parse tolerantly (grounding citations may add surrounding prose).
             result = _extract_json(text)
             if not isinstance(result, dict):
                 self._send_json(
@@ -749,31 +825,6 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             self._send_json(200, result)
-
-        except anthropic.RateLimitError:
-            traceback.print_exc(file=sys.stderr)
-            self._send_json(
-                503,
-                {"error": "The AI is over its usage limit right now. "
-                          "Please try again in a few minutes."},
-            )
-        except (anthropic.BadRequestError, anthropic.PermissionDeniedError,
-                anthropic.AuthenticationError) as exc:
-            traceback.print_exc(file=sys.stderr)
-            msg = str(getattr(exc, "message", "") or exc).lower()
-            if (isinstance(exc, anthropic.AuthenticationError)
-                    or "credit" in msg or "billing" in msg or "quota" in msg):
-                self._send_json(
-                    503,
-                    {"error": "The AI is temporarily unavailable (it may be out of credit "
-                              "for now). Please try again later — your work isn't lost."},
-                )
-            else:
-                self._send_json(
-                    500,
-                    {"error": "Something went wrong generating your spreadsheet plan. "
-                              "Please try again."},
-                )
         except Exception:  # noqa: BLE001 — sanitize all failures for the client
             # Log the full error server-side (Vercel captures stderr) but never
             # leak the API key, raw exception text, or a stack trace to the client.

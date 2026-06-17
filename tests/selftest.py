@@ -255,41 +255,6 @@ CANNED = {
 }
 
 
-def _fake_anthropic(behavior):
-    ns = types.SimpleNamespace()
-    ns.NotFoundError = type("NotFoundError", (Exception,), {})
-    ns.PermissionDeniedError = type("PermissionDeniedError", (Exception,), {})
-    ns.RateLimitError = type("RateLimitError", (Exception,), {})
-    ns.BadRequestError = type("BadRequestError", (Exception,), {})
-    ns.AuthenticationError = type("AuthenticationError", (Exception,), {})
-
-    class _Block:
-        def __init__(self, text):
-            self.type = "text"
-            self.text = text
-
-    class _Resp:
-        def __init__(self, text, stop_reason="end_turn"):
-            self.content = [_Block(text)]
-            self.stop_reason = stop_reason
-
-    class _Messages:
-        def __init__(self):
-            self.calls = []
-
-        def create(self, **kw):
-            self.calls.append(kw)
-            return behavior(kw, len(self.calls), _Resp, ns)
-
-    class _Client:
-        def __init__(self, *a, **k):
-            self.messages = _Messages()
-
-    ns.Anthropic = _Client
-    ns._Resp = _Resp
-    return ns
-
-
 def _drive(imp, body_bytes, content_length=None, env=None):
     """Invoke imp.handler.do_POST with a fake request; capture (status, json)."""
     captured = {"status": None, "headers": {}, "body": b""}
@@ -310,19 +275,8 @@ def _drive(imp, body_bytes, content_length=None, env=None):
         def end_headers(self):
             pass
 
-    old_env = os.environ.get("ANTHROPIC_API_KEY")
-    if env is not None and "ANTHROPIC_API_KEY" in env:
-        os.environ["ANTHROPIC_API_KEY"] = env["ANTHROPIC_API_KEY"]
-    elif env is not None:
-        os.environ.pop("ANTHROPIC_API_KEY", None)
-    try:
-        h = TestHandler()
-        h.do_POST()
-    finally:
-        if old_env is not None:
-            os.environ["ANTHROPIC_API_KEY"] = old_env
-        else:
-            os.environ.pop("ANTHROPIC_API_KEY", None)
+    h = TestHandler()
+    h.do_POST()
 
     raw = h.wfile.getvalue()
     try:
@@ -332,217 +286,141 @@ def _drive(imp, body_bytes, content_length=None, env=None):
     return captured["status"], parsed, h.messages_ref if hasattr(h, "messages_ref") else None
 
 
+def _set_keys(imp, gemini="g-key", xai=None):
+    imp.GEMINI_API_KEY = gemini
+    imp.XAI_API_KEY = xai
+
+
 def test_improve():
     print("\n[improve.py]")
     imp = _load("improve_mod", os.path.join("api", "improve.py"))
+    _set_keys(imp)  # configured (Gemini key present) by default
+
+    def gen_returns(text, store=None):
+        def _g(system, user_text, files):
+            if store is not None:
+                store.update(system=system, user_text=user_text, files=files)
+            return text
+        return _g
+
+    def gen_raises(reason):
+        def _g(system, user_text, files):
+            raise imp._ProviderError(reason)
+        return _g
+
+    img_b64 = "aGVsbG8="  # dummy base64
 
     # success
-    imp.anthropic = _fake_anthropic(lambda kw, n, R, ns: R(json.dumps(CANNED)))
-    status, parsed, _ = _drive(imp, json.dumps({"prompt": "budget tracker"}).encode(),
-                               env={"ANTHROPIC_API_KEY": "sk-ant-test"})
+    imp._generate = gen_returns(json.dumps(CANNED))
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "budget tracker"}).encode())
     check("success: 200", status == 200)
     check("success: returns improvedPrompt+notes+spec",
           isinstance(parsed, dict) and {"improvedPrompt", "notes", "spec"} <= set(parsed))
 
-    # model fallback chain: first model NotFound -> second succeeds
-    calls = {"models": []}
-
-    def fb(kw, n, R, ns):
-        calls["models"].append(kw["model"])
-        if n == 1:
-            raise ns.NotFoundError("no access to that model")
-        return R(json.dumps(CANNED))
-
-    imp.anthropic = _fake_anthropic(fb)
-    status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode(),
-                               env={"ANTHROPIC_API_KEY": "sk-ant-test"})
-    check("fallback: 200 after first model unavailable", status == 200)
-    check("fallback: tried primary then fell back to a second model",
-          len(calls["models"]) == 2 and calls["models"][0] == imp.MODEL_CHAIN[0]
-          and calls["models"][1] == imp.MODEL_CHAIN[1])
-    check("fallback: thinking+effort sent to supported models", True)  # see request-shape test below
-
-    # request shape: supported model gets thinking + effort
-    seen = {}
-
-    def capture(kw, n, R, ns):
-        seen.update(kw)
-        return R(json.dumps(CANNED))
-
-    imp.anthropic = _fake_anthropic(capture)
-    _drive(imp, json.dumps({"prompt": "x"}).encode(), env={"ANTHROPIC_API_KEY": "sk-ant-test"})
-    check("shape: model is Fable 5 by default", str(seen.get("model", "")).startswith("claude-fable-5"))
-    check("shape: adaptive thinking present", seen.get("thinking") == {"type": "adaptive"})
-    check("shape: effort inside output_config", seen.get("output_config", {}).get("effort") == imp.EFFORT)
-    check("shape: no structured-output format sent (prompt-JSON envelope)",
-          "format" not in seen.get("output_config", {}))
-    check("shape: no temperature/top_p/top_k", not ({"temperature", "top_p", "top_k"} & set(seen)))
-    check("shape: web_search tool enabled",
-          isinstance(seen.get("tools"), list) and seen["tools"][0].get("type") == "web_search_20250305")
-
-    # max_tokens stop_reason -> friendly 500
-    imp.anthropic = _fake_anthropic(lambda kw, n, R, ns: R(json.dumps(CANNED), stop_reason="max_tokens"))
-    status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode(),
-                               env={"ANTHROPIC_API_KEY": "sk-ant-test"})
-    check("max_tokens: 500", status == 500)
-    check("max_tokens: friendly message, no leak", isinstance(parsed, dict) and "too large" in parsed.get("error", ""))
-
-    # missing API key -> 500 (anthropic never called)
-    imp.anthropic = _fake_anthropic(lambda kw, n, R, ns: R(json.dumps(CANNED)))
-    status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode(), env={})  # no key
-    check("no key: 500", status == 500)
-    check("no key: 'not configured' message", "not configured" in parsed.get("error", ""))
-
-    # empty prompt -> 400
-    status, parsed, _ = _drive(imp, json.dumps({"prompt": "   "}).encode(),
-                               env={"ANTHROPIC_API_KEY": "sk-ant-test"})
-    check("empty prompt: 400", status == 400)
-
-    # malformed JSON -> 400
-    status, parsed, _ = _drive(imp, b"{not json", env={"ANTHROPIC_API_KEY": "sk-ant-test"})
-    check("bad json: 400", status == 400)
-
-    # oversized body -> 413 (Content-Length over the cap, body not read)
-    status, parsed, _ = _drive(imp, b"{}", content_length=imp.MAX_BODY_BYTES + 1,
-                               env={"ANTHROPIC_API_KEY": "sk-ant-test"})
-    check("oversized: 413", status == 413)
-
-    # clarifications are folded into the user message sent to the model
-    seen2 = {}
-
-    def cap2(kw, n, R, ns):
-        seen2.update(kw)
-        return R(json.dumps(CANNED))
-
-    imp.anthropic = _fake_anthropic(cap2)
-    _drive(imp, json.dumps({"prompt": "sales report",
-                            "clarifications": [{"question": "Period?", "answer": "Q1 2026"}]}).encode(),
-           env={"ANTHROPIC_API_KEY": "sk-ant-test"})
-    cont2 = (seen2.get("messages") or [{}])[0].get("content")
-    if isinstance(cont2, list):
-        umsg = next((b.get("text", "") for b in cont2 if isinstance(b, dict) and b.get("type") == "text"), "")
-    else:
-        umsg = cont2 or ""
-    check("clarifications: folded into the user message",
-          "Answers to your questions" in umsg and "Q1 2026" in umsg)
-
-    # a needs_input response passes through unchanged (frontend handles it)
+    # needs_input passthrough
     NEEDS = {"status": "needs_input", "notes": "need a couple details",
              "questions": [{"question": "What period?", "hint": "e.g. 2026"}]}
-    imp.anthropic = _fake_anthropic(lambda kw, n, R, ns: R(json.dumps(NEEDS)))
-    status, parsed, _ = _drive(imp, json.dumps({"prompt": "a report"}).encode(),
-                               env={"ANTHROPIC_API_KEY": "sk-ant-test"})
+    imp._generate = gen_returns(json.dumps(NEEDS))
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "a report"}).encode())
     check("needs_input: 200 passthrough with status", status == 200 and parsed.get("status") == "needs_input")
     check("needs_input: questions present", isinstance(parsed.get("questions"), list) and len(parsed["questions"]) == 1)
 
-    # --- attachments: file -> content blocks ---
-    img_b64 = "aGVsbG8="  # dummy base64
-    blocks = imp._build_file_blocks([{"type": "image", "media_type": "image/jpeg", "data": img_b64, "name": "x.jpg"}])
-    check("files: image -> image block",
-          len(blocks) == 1 and blocks[0]["type"] == "image"
-          and blocks[0]["source"]["media_type"] == "image/jpeg" and blocks[0]["source"]["data"] == img_b64)
-    pblocks = imp._build_file_blocks([{"type": "pdf", "media_type": "application/pdf", "data": img_b64}])
-    check("files: pdf -> document block",
-          len(pblocks) == 1 and pblocks[0]["type"] == "document"
-          and pblocks[0]["source"]["media_type"] == "application/pdf")
-    check("files: none -> empty list", imp._build_file_blocks(None) == [])
+    # config: provider chain default is gemini -> grok
+    check("config: provider chain is gemini then grok", imp.PROVIDER_CHAIN == ["gemini", "grok"])
+
+    # no provider key -> 500
+    _set_keys(imp, gemini=None, xai=None)
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode())
+    check("no key: 500", status == 500)
+    check("no key: 'not configured' message", "not configured" in (parsed or {}).get("error", ""))
+    _set_keys(imp)  # restore
+
+    # empty prompt -> 400
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "   "}).encode())
+    check("empty prompt: 400", status == 400)
+
+    # malformed request JSON -> 400
+    status, parsed, _ = _drive(imp, b"{not json")
+    check("bad json: 400", status == 400)
+
+    # oversized body -> 413 (Content-Length over the cap)
+    status, parsed, _ = _drive(imp, b"{}", content_length=imp.MAX_BODY_BYTES + 1)
+    check("oversized: 413", status == 413)
+
+    # clarifications are folded into the prompt sent to the provider
+    store = {}
+    imp._generate = gen_returns(json.dumps(CANNED), store)
+    _drive(imp, json.dumps({"prompt": "sales report",
+                            "clarifications": [{"question": "Period?", "answer": "Q1 2026"}]}).encode())
+    check("clarifications: folded into the user message",
+          "Answers to your questions" in store.get("user_text", "") and "Q1 2026" in store.get("user_text", ""))
+
+    # baseSpec (edit mode) folded in
+    store = {}
+    imp._generate = gen_returns(json.dumps(CANNED), store)
+    _drive(imp, json.dumps({"prompt": "add a Tax column",
+                            "baseSpec": {"title": "T", "sheets": [{"name": "S",
+                                         "columns": [{"header": "A", "type": "text"}]}]}}).encode())
+    check("baseSpec: folded into the user message as an edit instruction",
+          "CURRENT SPREADSHEET to edit" in store.get("user_text", "") and "add a Tax column" in store.get("user_text", ""))
+
+    # baseSpec with empty sheets still treated as an edit
+    store = {}
+    imp._generate = gen_returns(json.dumps(CANNED), store)
+    _drive(imp, json.dumps({"prompt": "add a column", "baseSpec": {"title": "T", "sheets": []}}).encode())
+    check("baseSpec: empty-sheets spec still framed as an edit",
+          "CURRENT SPREADSHEET to edit" in store.get("user_text", ""))
+
+    # locale folded in (for local-currency recommendations)
+    store = {}
+    imp._generate = gen_returns(json.dumps(CANNED), store)
+    _drive(imp, json.dumps({"prompt": "a price list", "locale": "de-CH"}).encode())
+    check("locale: folded into the user message", "User locale: de-CH" in store.get("user_text", ""))
+
+    # attachments reach the provider (validated) + a note is added to the prompt
+    store = {}
+    imp._generate = gen_returns(json.dumps(CANNED), store)
+    _drive(imp, json.dumps({"prompt": "expenses from this receipt",
+                            "files": [{"type": "image", "media_type": "image/jpeg", "data": img_b64, "name": "r.jpg"}]}).encode())
+    check("files: passed to provider",
+          isinstance(store.get("files"), list) and len(store["files"]) == 1 and store["files"][0]["kind"] == "image")
+    check("files: note added to prompt", "attached file" in store.get("user_text", ""))
+
+    # _validate_files behaviour
+    clean = imp._validate_files([{"type": "image", "media_type": "image/jpeg", "data": img_b64, "name": "x.jpg"}])
+    check("validate: image kept", len(clean) == 1 and clean[0]["kind"] == "image" and clean[0]["media_type"] == "image/jpeg")
+    check("validate: pdf kept",
+          imp._validate_files([{"type": "pdf", "media_type": "application/pdf", "data": img_b64}])[0]["kind"] == "pdf")
+    check("validate: none -> []", imp._validate_files(None) == [])
 
     def rejects_files(label, files):
         try:
-            imp._build_file_blocks(files)
+            imp._validate_files(files)
             check(label + " (should reject)", False)
         except imp._InputError:
             check(label, True)
 
-    rejects_files("files: reject too many", [{"type": "image", "media_type": "image/png", "data": "x"}] * (imp.MAX_FILES + 1))
-    rejects_files("files: reject bad image type", [{"type": "image", "media_type": "image/tiff", "data": "x"}])
-    rejects_files("files: reject pdf with image type", [{"type": "pdf", "media_type": "image/png", "data": "x"}])
-    rejects_files("files: reject unknown kind", [{"type": "video", "media_type": "video/mp4", "data": "x"}])
-    rejects_files("files: reject empty data", [{"type": "image", "media_type": "image/png", "data": ""}])
-    rejects_files("files: reject oversized", [{"type": "image", "media_type": "image/png", "data": "a" * (imp.MAX_FILE_B64 + 1)}])
-
-    # integration: attachments reach the model as content blocks (text + image)
-    seen3 = {}
-
-    def cap3(kw, n, R, ns):
-        seen3.update(kw)
-        return R(json.dumps(CANNED))
-
-    imp.anthropic = _fake_anthropic(cap3)
-    _drive(imp, json.dumps({"prompt": "expenses from this receipt",
-                            "files": [{"type": "image", "media_type": "image/jpeg", "data": img_b64, "name": "r.jpg"}]}).encode(),
-           env={"ANTHROPIC_API_KEY": "sk-ant-test"})
-    cont = (seen3.get("messages") or [{}])[0].get("content")
-    has_text = isinstance(cont, list) and any(isinstance(b, dict) and b.get("type") == "text" for b in cont)
-    has_img = isinstance(cont, list) and any(isinstance(b, dict) and b.get("type") == "image" for b in cont)
-    check("files: message content is blocks with text + image", has_text and has_img)
-
-    # baseSpec (edit mode) is folded into the user message as an edit instruction
-    seen4 = {}
-
-    def cap4(kw, n, R, ns):
-        seen4.update(kw)
-        return R(json.dumps(CANNED))
-
-    imp.anthropic = _fake_anthropic(cap4)
-    _drive(imp, json.dumps({"prompt": "add a Tax column",
-                            "baseSpec": {"title": "T", "sheets": [{"name": "S",
-                                         "columns": [{"header": "A", "type": "text"}]}]}}).encode(),
-           env={"ANTHROPIC_API_KEY": "sk-ant-test"})
-    cont4 = (seen4.get("messages") or [{}])[0].get("content")
-    etext = (next((b.get("text", "") for b in cont4 if isinstance(b, dict) and b.get("type") == "text"), "")
-             if isinstance(cont4, list) else (cont4 or ""))
-    check("baseSpec: folded into the user message as an edit instruction",
-          "CURRENT SPREADSHEET to edit" in etext and "add a Tax column" in etext)
-
-    # baseSpec with an empty sheets list is still treated as an edit (framing present)
-    seen5 = {}
-
-    def cap5(kw, n, R, ns):
-        seen5.update(kw)
-        return R(json.dumps(CANNED))
-
-    imp.anthropic = _fake_anthropic(cap5)
-    _drive(imp, json.dumps({"prompt": "add a column", "baseSpec": {"title": "T", "sheets": []}}).encode(),
-           env={"ANTHROPIC_API_KEY": "sk-ant-test"})
-    cont5 = (seen5.get("messages") or [{}])[0].get("content")
-    etext5 = (next((b.get("text", "") for b in cont5 if isinstance(b, dict) and b.get("type") == "text"), "")
-              if isinstance(cont5, list) else (cont5 or ""))
-    check("baseSpec: empty-sheets spec still framed as an edit",
-          "CURRENT SPREADSHEET to edit" in etext5)
-
-    # locale is folded into the user message (for local-currency recommendations)
-    seenL = {}
-
-    def capL(kw, n, R, ns):
-        seenL.update(kw)
-        return R(json.dumps(CANNED))
-
-    imp.anthropic = _fake_anthropic(capL)
-    _drive(imp, json.dumps({"prompt": "a price list", "locale": "de-CH"}).encode(),
-           env={"ANTHROPIC_API_KEY": "sk-ant-test"})
-    contL = (seenL.get("messages") or [{}])[0].get("content")
-    ltext = (next((b.get("text", "") for b in contL if isinstance(b, dict) and b.get("type") == "text"), "")
-             if isinstance(contL, list) else (contL or ""))
-    check("locale: folded into the user message", "User locale: de-CH" in ltext)
-
-    # out-of-credit -> graceful 503 (not a scary generic error)
-    def raise_credit(kw, n, R, ns):
-        raise ns.BadRequestError("Your credit balance is too low to access the Anthropic API")
-
-    imp.anthropic = _fake_anthropic(raise_credit)
-    status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode(),
-                               env={"ANTHROPIC_API_KEY": "sk-ant-test"})
-    check("credit: graceful 503", status == 503 and "out of credit" in (parsed or {}).get("error", "").lower())
+    rejects_files("validate: reject too many", [{"type": "image", "media_type": "image/png", "data": "x"}] * (imp.MAX_FILES + 1))
+    rejects_files("validate: reject bad image type", [{"type": "image", "media_type": "image/tiff", "data": "x"}])
+    rejects_files("validate: reject pdf with image type", [{"type": "pdf", "media_type": "image/png", "data": "x"}])
+    rejects_files("validate: reject unknown kind", [{"type": "video", "media_type": "video/mp4", "data": "x"}])
+    rejects_files("validate: reject empty data", [{"type": "image", "media_type": "image/png", "data": ""}])
+    rejects_files("validate: reject oversized", [{"type": "image", "media_type": "image/png", "data": "a" * (imp.MAX_FILE_B64 + 1)}])
 
     # rate limit -> graceful 503
-    def raise_rl(kw, n, R, ns):
-        raise ns.RateLimitError("rate limited")
-
-    imp.anthropic = _fake_anthropic(raise_rl)
-    status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode(),
-                               env={"ANTHROPIC_API_KEY": "sk-ant-test"})
+    imp._generate = gen_raises("rate_limit")
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode())
     check("rate_limit: graceful 503", status == 503 and "usage limit" in (parsed or {}).get("error", "").lower())
+
+    # auth / quota -> graceful 503
+    imp._generate = gen_raises("auth")
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode())
+    check("auth: graceful 503", status == 503 and "temporarily unavailable" in (parsed or {}).get("error", "").lower())
+
+    # malformed model output -> 500
+    imp._generate = gen_returns("not json at all")
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode())
+    check("malformed: 500", status == 500 and "malformed" in (parsed or {}).get("error", "").lower())
 
     # _extract_json robustness (prompt-JSON envelope parsing)
     ej = imp._extract_json

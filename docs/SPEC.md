@@ -23,7 +23,7 @@ different port also works. Both accept `OPTIONS` (CORS preflight) and `POST`.
 ### `POST /api/improve`  →  JSON
 
 Turns a rough human prompt into a polished prompt **and** a complete `SpreadsheetSpec`.
-This is the only endpoint that calls the Anthropic API.
+This is the only endpoint that calls an AI provider (Google Gemini, then xAI Grok).
 
 **Request body**
 ```json
@@ -96,9 +96,9 @@ be `status: "ready"` — never re-ask.
 { "error": "human-readable message" }
 ```
 - `400` — missing/empty `prompt`, or malformed JSON.
-- `500` — missing `ANTHROPIC_API_KEY`, upstream API error, or the model returned
-  something that is not a valid spec. The message must be safe to show a user
-  (never leak the key or a raw stack trace).
+- `500`/`503` — no provider key configured, the provider was unavailable (rate
+  limit / auth), or the model returned something that is not a valid spec. The
+  message must be safe to show a user (never leak the key or a raw stack trace).
 
 ### `POST /api/generate`  →  binary `.xlsx`
 

@@ -1,5 +1,5 @@
 # Python deps for the Vercel serverless functions in /api.
-# Pinned to the versions verified locally during QA (see docs/DEPLOY.md).
-# anthropic 0.109.2 exposes output_config (structured outputs) + adaptive thinking.
-anthropic==0.109.2
-openpyxl==3.1.5
+# Pinned to the versions verified during QA (see docs/DEPLOY.md).
+google-genai==2.8.0    # Gemini — primary AI provider (free tier; vision + grounding)
+openai==2.42.0         # xAI Grok fallback (OpenAI-compatible API)
+openpyxl==3.1.5        # deterministic .xlsx rendering (api/generate.py)

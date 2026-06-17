@@ -31,7 +31,7 @@ aggregation). Plus **77 offline unit tests** and several adversarial review pass
 
 ## Tech at a glance
 - **Frontend:** vanilla-JS PWA (installable, offline shell, voice + typed input)
-- **AI:** Anthropic API (`claude-fable-5`, with an Opus 4.8 fallback; swappable) producing a structured spec
+- **AI:** Google Gemini (free tier) primary → xAI Grok fallback — multimodal (image + PDF) with live web-search, producing a structured spec
 - **Backend:** Vercel Python serverless functions (key stays server-side)
 - **Excel:** openpyxl (charts, formulas, totals rows, conditional formatting, dropdowns, named ranges)
 - **Hosting:** Vercel — online 24/7, auto-deploy from GitHub
@@ -45,13 +45,14 @@ aggregation). Plus **77 offline unit tests** and several adversarial review pass
 | [docs/DEPLOY.md](docs/DEPLOY.md) | Turnkey deploy + local dev (non-developer friendly) |
 
 ## Quick start
-See [docs/DEPLOY.md](docs/DEPLOY.md). Short version: add `ANTHROPIC_API_KEY` to a local
-`.env`, run `vercel dev`, open `http://localhost:3000`.
+See [docs/DEPLOY.md](docs/DEPLOY.md). Short version: add `GEMINI_API_KEY` (free) to a
+local `.env`, run `vercel dev`, open `http://localhost:3000`.
 
 ## Cost
-With the default **Fable 5** model (the most capable), expect roughly a few cents up to
-~40¢ per spreadsheet. To spend less, set `MODEL=claude-opus-4-8` or lower `EFFORT` — the
-app still produces great results. Set a spend limit in the Anthropic console for peace of mind.
+**Free.** The primary provider is Google Gemini's free tier (rate-limited, no card),
+so the AI step costs nothing for normal/portfolio traffic. The optional xAI **Grok**
+fallback uses a little credit only if Gemini is ever unavailable. Live web-search uses
+Gemini's free Google-Search grounding.
 
 ---
 <p align="center">Built as a portfolio project. The Excel generator runs no AI and makes no network calls — it cannot leak anything.</p>
