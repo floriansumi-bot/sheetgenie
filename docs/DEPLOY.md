@@ -8,10 +8,12 @@ Plain-language steps. You do not need to be a developer — follow in order.
 1. **Gemini (free, required)** — go to **https://aistudio.google.com**, click
    **"Get API key"** (no credit card). Copy the key. This is the primary provider, and
    its free tier is plenty for portfolio traffic, so the AI step costs nothing.
-2. **Grok / xAI (optional fallback)** — go to **https://x.ai** and create an API key
-   (starts with `xai-`). Only used if Gemini is ever unavailable; xAI needs a little
-   credit, so you can skip it and add it later (the app runs Gemini-only without it).
-3. Keep both keys secret — you'll paste them into Vercel in Part C.
+2. **Grok / xAI (optional, PAID)** — go to **https://x.ai** and create an API key
+   (starts with `xai-`). This is only a fallback for if Gemini is ever down. ⚠️ xAI has
+   **no free tier** — without account credit the API returns `403`, so the fallback
+   won't actually work until you fund it. **Recommendation: skip it** and run Gemini-only
+   (free); you can always add it later.
+3. Keep your key(s) secret — you'll paste them into Vercel in Part C.
 
 ---
 
@@ -36,9 +38,9 @@ git push -u origin main
 2. **Add New → Project**, import the `sheetgenie` repo.
 3. Framework Preset: **Other** (it's a static site + Python functions — no build needed).
 4. Expand **Environment Variables** and add:
-   - `GEMINI_API_KEY` = your free Gemini key from Part A  *(required — primary provider)*
-   - `XAI_API_KEY` = your `xai-...` key  *(optional — Grok fallback; omit to run Gemini-only)*
-   - `PROVIDERS` = `gemini,grok`  *(optional; use just `gemini` for free-only)*
+   - `GEMINI_API_KEY` = your free Gemini key from Part A  ← **the only one you need (free)**
+   - `XAI_API_KEY` = your `xai-...` key  *(optional — Grok fallback; needs PAID xAI credit, else 403. Leave out to run free.)*
+   - `PROVIDERS` = `gemini`  *(optional; recommended free-only. Use `gemini,grok` only if you funded xAI.)*
    - `WEB_SEARCH` = `on`  *(optional; live data via Gemini grounding — set `off` to disable)*
 5. Click **Deploy**. After ~1 min you get a live URL like `https://sheetgenie.vercel.app`.
 6. (Optional) **Settings → Domains** to attach a custom domain for your portfolio.

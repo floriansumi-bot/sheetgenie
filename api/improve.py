@@ -389,10 +389,11 @@ PROVIDER_CHAIN = _provider_chain()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
 
-# xAI Grok (OpenAI-compatible). Default to a vision-capable model so image uploads
-# still work on the fallback path; override via XAI_MODEL.
+# xAI Grok (OpenAI-compatible). Default to the current multimodal flagship so image
+# uploads still work on the fallback path; override via XAI_MODEL. NOTE: Grok is a
+# PAID fallback — an xAI account with credit is required, else the API returns 403.
 XAI_API_KEY = os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY")
-XAI_MODEL = os.environ.get("XAI_MODEL") or "grok-2-vision-1212"
+XAI_MODEL = os.environ.get("XAI_MODEL") or "grok-4.3"
 XAI_BASE_URL = os.environ.get("XAI_BASE_URL") or "https://api.x.ai/v1"
 
 # Output token ceiling. Kept moderate so generation comfortably finishes inside
@@ -415,7 +416,7 @@ _IMAGE_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 # Live web search: lets the model pull CURRENT real-world data (prices, rates,
 # weather, stats) into the spreadsheet — via Gemini's Google-Search grounding
-# (free) or Grok's live search. Toggle via the WEB_SEARCH env var.
+# (free). Toggle via the WEB_SEARCH env var. (The Grok fallback is text + image only.)
 WEB_SEARCH_ENABLED = (os.environ.get("WEB_SEARCH") or "on").strip().lower() not in (
     "off", "0", "false", "no",
 )
@@ -559,7 +560,6 @@ def _call_grok(system, user_text, files):
         content.append({"type": "text", "text": "(A PDF was attached but can't be read on "
                                                  "this fallback path; use the rest of the input.)"})
 
-    extra_body = {"search_parameters": {"mode": "auto"}} if WEB_SEARCH_ENABLED else None
     try:
         client = OpenAI(api_key=XAI_API_KEY, base_url=XAI_BASE_URL)
         resp = client.chat.completions.create(
@@ -567,7 +567,6 @@ def _call_grok(system, user_text, files):
             messages=[{"role": "system", "content": system},
                       {"role": "user", "content": content}],
             max_tokens=MAX_TOKENS,
-            extra_body=extra_body,
         )
     except openai.RateLimitError as exc:
         raise _ProviderError("rate_limit", str(exc)[:200])
