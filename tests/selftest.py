@@ -433,10 +433,73 @@ def test_improve():
     status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode())
     check("auth: graceful 503", status == 503 and "temporarily unavailable" in (parsed or {}).get("error", "").lower())
 
-    # malformed model output -> 500
+    # malformed model output on BOTH the first call and the corrective retry -> 502
     imp._generate = gen_returns("not json at all")
     status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode())
-    check("malformed: 500", status == 500 and "malformed" in (parsed or {}).get("error", "").lower())
+    check("malformed (both tries): 502", status == 502 and "malformed" in (parsed or {}).get("error", "").lower())
+
+    # malformed first, valid on the corrective retry -> 200 (the retry recovers it)
+    seq = {"n": 0}
+    def gen_retry(system, user_text, files):
+        seq["n"] += 1
+        return "garbage, not json" if seq["n"] == 1 else json.dumps(CANNED)
+    imp._generate = gen_retry
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode())
+    check("retry: malformed then valid -> 200", status == 200 and (parsed or {}).get("status") == "ready")
+    check("retry: the corrective retry actually fired", seq["n"] == 2)
+
+    # a spec with a stray non-array row ("null" string) is repaired, not passed through
+    BAD_ROW = {"status": "ready", "improvedPrompt": "p", "notes": "n",
+               "spec": {"title": "B", "sheets": [{"name": "S",
+                        "columns": [{"header": "Cat", "type": "text"}, {"header": "Amt", "type": "number"}],
+                        "rows": [["Rent", 100], "null", ["Food", 50]]}]}}
+    imp._generate = gen_returns(json.dumps(BAD_ROW))
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "budget"}).encode())
+    rows = (((parsed or {}).get("spec") or {}).get("sheets") or [{}])[0].get("rows", [])
+    check("sanitize: 200 with the bad row dropped",
+          status == 200 and len(rows) == 2 and all(isinstance(r, list) for r in rows))
+
+    # a "layouts" response is returned to the client unchanged
+    LAYOUTS = {"status": "layouts", "notes": "pick one",
+               "layouts": [{"title": "Flat", "summary": "one sheet", "sheets": [{"name": "S", "columns": ["A", "B"]}]},
+                           {"title": "Tabs", "summary": "many", "sheets": [{"name": "Jan", "columns": ["A"]}]}]}
+    imp._generate = gen_returns(json.dumps(LAYOUTS))
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "a budget"}).encode())
+    check("layouts: 200 passthrough",
+          status == 200 and (parsed or {}).get("status") == "layouts" and len((parsed or {}).get("layouts", [])) == 2)
+
+    # directBuild (Regenerate) instructs the model to skip the layout step
+    store = {}
+    imp._generate = gen_returns(json.dumps(CANNED), store)
+    _drive(imp, json.dumps({"prompt": "a refined budget", "directBuild": True}).encode())
+    check("directBuild: instructs a direct build (skip layouts)",
+          "do NOT propose layouts" in store.get("user_text", ""))
+
+    # directBuild is suppressed while editing (an edit always builds anyway)
+    store = {}
+    imp._generate = gen_returns(json.dumps(CANNED), store)
+    _drive(imp, json.dumps({"prompt": "x", "directBuild": True,
+                            "baseSpec": {"title": "T", "sheets": [{"name": "S",
+                                         "columns": [{"header": "A", "type": "text"}]}]}}).encode())
+    check("directBuild: suppressed during an edit", "do NOT propose layouts" not in store.get("user_text", ""))
+
+    # _sanitize_spec unit behaviour
+    san = imp._sanitize_spec
+    check("sanitize_spec: drops non-array rows",
+          san({"sheets": [{"columns": [{"header": "A"}], "rows": [["x"], "null", 3]}]})["sheets"][0]["rows"] == [["x"]])
+    check("sanitize_spec: no sheets -> None", san({"sheets": []}) is None)
+    check("sanitize_spec: sheet without columns dropped -> None", san({"sheets": [{"name": "S"}]}) is None)
+    check("sanitize_spec: not a dict -> None", san("nope") is None)
+
+    # _normalize_result unit behaviour
+    norm = imp._normalize_result
+    check("normalize: ready without a spec -> None", norm({"status": "ready", "notes": "n"}) is None)
+    check("normalize: needs_input without questions -> None", norm({"status": "needs_input"}) is None)
+    check("normalize: layouts with options passes",
+          (norm({"status": "layouts", "layouts": [{"title": "A", "sheets": []}]}) or {}).get("status") == "layouts")
+    check("normalize: layouts empty -> None", norm({"status": "layouts", "layouts": []}) is None)
+    check("normalize: missing status but valid spec -> ready",
+          (norm({"spec": {"sheets": [{"columns": [{"header": "A"}], "rows": []}]}}) or {}).get("status") == "ready")
 
     # _extract_json robustness (prompt-JSON envelope parsing)
     ej = imp._extract_json

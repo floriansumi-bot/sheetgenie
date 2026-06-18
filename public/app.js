@@ -513,7 +513,9 @@
   // Calls /api/improve. `clarifications` is null on the first pass, or an array of
   // {question, answer} once the user has answered the model's questions.
   // `chosenLayout` is set when the user picks one of the proposed layouts.
-  async function runImprove(clarifications, chosenLayout) {
+  // `directBuild` skips the layout-proposal step (used by Regenerate, where the
+  // user has already refined the prompt and wants the spec rebuilt straight away).
+  async function runImprove(clarifications, chosenLayout, directBuild) {
     if (busy) return;
     clearError();
     setBusy(true);
@@ -533,6 +535,7 @@
       files: pendingFiles.length ? pendingFiles : null,
       clarifications: clarifications || null,
       chosenLayout: chosenLayout || null,
+      directBuild: !!directBuild,
       locale: (navigator.language || ''),
     };
 
@@ -730,7 +733,7 @@
         if (!refined) { showError('The improved prompt is empty — type what you want.'); return; }
         pendingPrompt = refined;
         pendingBaseSpec = null;   // a refined full prompt -> a fresh spec (keeps any data/files added)
-        runImprove(null);
+        runImprove(null, null, true);   // build directly — don't re-propose layouts
       });
       improvedCard.appendChild(regenBtn);
       resultsEl.appendChild(improvedCard);

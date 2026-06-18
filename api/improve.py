@@ -683,6 +683,71 @@ def _extract_json(text):
     return parsed[0]
 
 
+def _sanitize_spec(spec):
+    """Coerce a model-produced spec into a structurally valid SpreadsheetSpec, or
+    return None if it can't be salvaged. Repairs the common model slips: rows that
+    aren't real arrays (e.g. a stray "null" STRING in the rows list), and sheets with
+    missing/empty columns. Generation downstream assumes rows are lists, so a bad row
+    would otherwise crash /api/generate or render a broken preview."""
+    if not isinstance(spec, dict):
+        return None
+    sheets_in = spec.get("sheets")
+    if not isinstance(sheets_in, list) or not sheets_in:
+        return None
+    clean_sheets = []
+    for sheet in sheets_in:
+        if not isinstance(sheet, dict):
+            continue
+        cols = sheet.get("columns")
+        if not isinstance(cols, list) or not cols:
+            continue
+        rows = sheet.get("rows")
+        if isinstance(rows, list):
+            # Keep only genuine row arrays — drop the "null"-string / non-list slips.
+            sheet["rows"] = [r for r in rows if isinstance(r, list)]
+        elif rows is not None:
+            sheet["rows"] = []
+        clean_sheets.append(sheet)
+    if not clean_sheets:
+        return None
+    spec["sheets"] = clean_sheets
+    return spec
+
+
+def _normalize_result(result):
+    """Validate the model's envelope by status and return a clean dict, or None if
+    it's malformed beyond repair (so the caller can retry, then error). Guarantees the
+    client gets exactly one well-formed shape — a "ready" spec, "needs_input"
+    questions, or "layouts" options — never a half-formed object that trips the UI."""
+    if not isinstance(result, dict):
+        return None
+    status = result.get("status")
+
+    if status == "needs_input":
+        qs = result.get("questions")
+        if isinstance(qs, list) and any(
+            isinstance(q, dict) and str(q.get("question", "")).strip() for q in qs
+        ):
+            return result
+        return None
+
+    if status == "layouts":
+        lays = result.get("layouts")
+        if isinstance(lays, list) and any(
+            isinstance(l, dict) and (l.get("title") or l.get("sheets")) for l in lays
+        ):
+            return result
+        return None
+
+    # "ready", or a legacy/blank status: must carry a salvageable spec.
+    spec = _sanitize_spec(result.get("spec"))
+    if spec is None:
+        return None
+    result["spec"] = spec
+    result["status"] = "ready"
+    return result
+
+
 class handler(BaseHTTPRequestHandler):
     """Vercel serverless handler. Class name MUST be `handler` (SPEC.md §1)."""
 
@@ -773,13 +838,25 @@ class handler(BaseHTTPRequestHandler):
             # The user picked one of the layouts we proposed — build it in full now
             # (status "ready"), following its sheet names and column headers.
             chosen_layout = payload.get("chosenLayout")
-            if isinstance(chosen_layout, dict) and isinstance(chosen_layout.get("sheets"), list):
+            editing = isinstance(base_spec, dict) and isinstance(base_spec.get("sheets"), list)
+            have_layout = isinstance(chosen_layout, dict) and isinstance(chosen_layout.get("sheets"), list)
+            if have_layout:
                 user_text += (
                     "\n\nCHOSEN LAYOUT — the user picked this structure. Build the FULL "
                     "spreadsheet for EXACTLY this layout now (status \"ready\"): keep these "
                     "sheet names and column headers, choose sensible column types/formulas, "
                     "and fill in realistic rows (or leave empty if a blank template was "
                     "asked for):\n" + json.dumps(chosen_layout)
+                )
+
+            # Regenerate/refine: the user edited the improved prompt and wants the
+            # workbook rebuilt directly — skip the layout-proposal step for this turn.
+            if payload.get("directBuild") and not editing and not have_layout:
+                user_text += (
+                    "\n\nThe user has already refined this request — do NOT propose "
+                    "layouts and do NOT ask questions this turn. Build the full workbook "
+                    "now: set status = \"ready\" and return improvedPrompt, notes, and a "
+                    "complete spec."
                 )
 
             if isinstance(data, str) and data.strip():
@@ -842,13 +919,29 @@ class handler(BaseHTTPRequestHandler):
                     )
                 return
 
-            # --- Parse the JSON envelope ------------------------------------
-            # The model returns one JSON object (per the OUTPUT FORMAT instruction);
-            # parse tolerantly (grounding citations may add surrounding prose).
-            result = _extract_json(text)
-            if not isinstance(result, dict):
+            # --- Parse + validate the JSON envelope -------------------------
+            # The model returns one JSON object (per OUTPUT FORMAT); parse tolerantly
+            # (grounding citations may add prose), then validate/repair so the client
+            # never receives a half-formed result (e.g. a spec with a "null"-string row).
+            result = _normalize_result(_extract_json(text))
+            if result is None:
+                # One corrective retry — models occasionally emit a malformed spec or
+                # skip a required field; a stricter nudge almost always fixes it.
+                try:
+                    retry_text = _generate(
+                        SYSTEM_PROMPT,
+                        user_text + "\n\nIMPORTANT: your previous reply was not usable. "
+                        "Return ONE JSON object only — no prose, no code fence. Every "
+                        "entry in spec.sheets[].rows MUST be an array aligned to the "
+                        "columns; never put a bare value like \"null\" as a row.",
+                        files,
+                    )
+                    result = _normalize_result(_extract_json(retry_text))
+                except _ProviderError:
+                    result = None
+            if result is None:
                 self._send_json(
-                    500,
+                    502,
                     {"error": "The spreadsheet plan came back malformed. "
                               "Please try again."},
                 )
