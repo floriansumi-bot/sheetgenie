@@ -373,6 +373,22 @@ list, e.g. ["To Do","In Progress","Done"]).
 range" or a "named constant" (e.g. a tax rate). Each: name and ref (an Excel \
 reference like "'Settings'!$B$1"); formula columns may then reference name.
 
+COMMON MISTAKES TO AVOID
+- Never leave a cell that should hold a number BLANK. If a row is a Subtotal / \
+VAT / Total / summary line, fill it with a real FORMULA (=SUM(...), \
+=SUMIFS(...), or a cross-sheet ref like =SUM('Line Items'!D2:D9)). An invoice or \
+summary whose totals are empty is a failure.
+- Do NOT both put a manual "Total"/"Subtotal" row inside rows AND set \
+totalsRow:true — that yields two total rows. Use ONE. And never SUM a column \
+that should not be summed (a Quantity, Rate, ID, or per-unit column).
+- Prefer SUMIFS / MAXIFS / MINIFS / AVERAGEIFS / COUNTIFS over array formulas \
+like =MAX(IF(...)) or =SUM(IF(...)) — those need special array entry and return \
+wrong values or errors in many spreadsheet apps. Use =MAXIFS(range,critRange,crit).
+- Do NOT set an explicit column "width" — the renderer auto-sizes columns to \
+their content. (If you ever must, keep it between 8 and 48.)
+- Don't add a chart for a tiny 2-3 row summary table; charts are for \
+comparisons / trends / breakdowns across several rows of data.
+
 HARD LIMITS (never exceed)
 - At most 8 sheets. At most 50 columns per sheet. At most 5000 rows per sheet. \
 At most 6 charts per sheet. At most 10 value columns per chart.
@@ -434,11 +450,31 @@ MAX_FILES_B64_TOTAL = 3_700_000   # combined base64 length across all attachment
 _IMAGE_MEDIA_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 
 # Live web search: lets the model pull CURRENT real-world data (prices, rates,
-# weather, stats) into the spreadsheet — via Gemini's Google-Search grounding
-# (free). Toggle via the WEB_SEARCH env var. (The Grok fallback is text + image only.)
+# weather, stats) into the spreadsheet — via Gemini's Google-Search grounding.
+# Toggle off entirely via the WEB_SEARCH env var. (The Grok fallback is text+image.)
 WEB_SEARCH_ENABLED = (os.environ.get("WEB_SEARCH") or "on").strip().lower() not in (
     "off", "0", "false", "no",
 )
+
+# Grounding has a MUCH smaller free quota than plain generation, and once it is
+# exhausted EVERY grounded call fails — even ones that never needed live data. So
+# we attach the search tool ONLY when the prompt actually signals a need for current
+# external data; everyday templates (budgets, invoices, trackers) use plain (high-
+# quota) generation and stay reliable.
+_LIVE_DATA_SIGNALS = (
+    "current", "currently", "latest", "newest", "today", "as of", "up to date",
+    "up-to-date", "real-time", "real time", "live price", "right now", "this week's",
+    "stock", "share price", "crypto", "bitcoin", "ethereum", "exchange rate",
+    "interest rate", "inflation", "gdp", "weather", "forecast", "headlines",
+    "market price", "market value", "market cap", "going rate", "trending",
+)
+
+
+def _wants_live_data(text):
+    """True if the prompt plausibly needs CURRENT real-world data, so grounding is
+    worth its scarce quota. Conservative by design — defaults to no search."""
+    t = (text or "").lower()
+    return any(sig in t for sig in _LIVE_DATA_SIGNALS)
 
 _CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
@@ -525,7 +561,7 @@ def _call_gemini(system, user_text, files):
         parts.append(gtypes.Part.from_bytes(data=raw, mime_type=f["media_type"]))
 
     cfg = {"system_instruction": system, "max_output_tokens": MAX_TOKENS, "temperature": 0.4}
-    if WEB_SEARCH_ENABLED:
+    if WEB_SEARCH_ENABLED and _wants_live_data(user_text):
         cfg["tools"] = [gtypes.Tool(google_search=gtypes.GoogleSearch())]
     if hasattr(gtypes, "ThinkingConfig"):
         # Keep the full token budget for the JSON (this is structured output, not a

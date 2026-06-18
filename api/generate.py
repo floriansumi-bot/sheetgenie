@@ -538,10 +538,14 @@ def _render_sheet(ws, sheet):
         cell.fill = HEADER_FILL
         cell.alignment = Alignment(vertical="center", wrap_text=False)
 
-        # Column width: explicit spec width wins; else the measured content width.
+        # Column width: honour an explicit spec width ONLY if it is sane — the model
+        # sometimes emits absurd values (e.g. 150-250), which produce huge blank
+        # columns / sideways scroll. Anything out of [MIN, MAX] falls back to the
+        # measured content width.
         width = col.get("width")
         letter = get_column_letter(ci)
-        if isinstance(width, (int, float)) and not isinstance(width, bool) and width > 0:
+        if (isinstance(width, (int, float)) and not isinstance(width, bool)
+                and MIN_COL_WIDTH <= width <= MAX_COL_WIDTH):
             ws.column_dimensions[letter].width = float(width)
         else:
             ws.column_dimensions[letter].width = auto_widths[ci - 1]

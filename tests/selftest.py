@@ -127,11 +127,17 @@ def test_generate():
     check("width: long-text data cell wraps", bool(wbS["C2"].alignment and wbS["C2"].alignment.wrap_text))
     check("width: normal-text column does not wrap", not (wbS["B2"].alignment and wbS["B2"].alignment.wrap_text))
 
-    # explicit spec width still wins over the auto measurement
+    # a SANE explicit spec width is honoured over the auto measurement
     expl = {"title": "e", "sheets": [{"name": "S", "columns": [{"header": "A", "type": "text", "width": 33}], "rows": [["hi"]]}]}
     gen._validate_spec(expl)
-    check("width: explicit spec width honoured",
+    check("width: sane explicit spec width honoured",
           load_workbook(io.BytesIO(gen._build_workbook(expl))).active.column_dimensions["A"].width == 33.0)
+
+    # an ABSURD explicit width (model sometimes emits 150-250) is rejected -> sane auto width
+    huge = {"title": "h", "sheets": [{"name": "S", "columns": [{"header": "Notes", "type": "text", "width": 250}], "rows": [["short note"]]}]}
+    gen._validate_spec(huge)
+    wHuge = load_workbook(io.BytesIO(gen._build_workbook(huge))).active.column_dimensions["A"].width
+    check("width: absurd explicit width (250) ignored -> <= MAX", wHuge <= gen.MAX_COL_WIDTH)
 
     # _auto_widths unit behaviour
     aw, wrap = gen._auto_widths(sized["sheets"][0]["columns"], sized["sheets"][0]["rows"], True)
@@ -541,6 +547,14 @@ def test_improve():
     check("normalize: layouts empty -> None", norm({"status": "layouts", "layouts": []}) is None)
     check("normalize: missing status but valid spec -> ready",
           (norm({"spec": {"sheets": [{"columns": [{"header": "A"}], "rows": []}]}}) or {}).get("status") == "ready")
+
+    # _wants_live_data: grounding (scarce quota) only fires for current/external-data prompts
+    wld = imp._wants_live_data
+    check("live-data: everyday budget -> no grounding", wld("A monthly budget to track my income and expenses") is False)
+    check("live-data: meal plan -> no grounding", wld("A weekly meal plan with a shopping list") is False)
+    check("live-data: invoice -> no grounding", wld("A simple invoice for my freelance work") is False)
+    check("live-data: latest iPhone prices -> grounding", wld("Compare the latest iPhone models with their prices") is True)
+    check("live-data: crypto prices -> grounding", wld("Current bitcoin and ethereum prices") is True)
 
     # _extract_json robustness (prompt-JSON envelope parsing)
     ej = imp._extract_json
