@@ -268,8 +268,15 @@
       return;
     }
 
+    // On touch devices the Web Audio visualizer's getUserMedia stream competes with
+    // SpeechRecognition for the single available microphone, which silently breaks
+    // transcription on Android. So skip the waveform there and let recognition own the mic.
+    const isTouch = matchMedia('(pointer: coarse)').matches
+      || /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+    if (isTouch && recCanvas) recCanvas.hidden = true;
+
     let recog = null;
-    let recording = false;     // user intent: the mic is on
+    let recording = false;     // user intent: the mic is on — OFF until the user taps the mic
     let manualStop = false;    // user tapped stop (don't auto-restart)
     let restarts = 0;
     let baseText = '';
@@ -348,7 +355,10 @@
     function startRecog() {
       recog = new SR();
       try { recog.lang = navigator.language || 'en-US'; } catch (_) {}
-      recog.continuous = true;
+      // Android/iOS don't support continuous recognition — it ends instantly and never
+      // delivers a result. Use single-utterance there and let onend restart it so the
+      // user can keep dictating across pauses; desktop keeps true continuous mode.
+      recog.continuous = !isTouch;
       recog.interimResults = true;
 
       recog.onresult = (event) => {
@@ -358,6 +368,7 @@
           if (res.isFinal) finalChunk += res[0].transcript;
           else interimChunk += res[0].transcript;
         }
+        if (finalChunk || interimChunk) restarts = 0;   // real audio came through — reset the silence guard
         if (finalChunk) baseText = baseText + sep + finalChunk.trim();
         if (finalChunk && !/\s$/.test(baseText)) sep = ' ';
         const liveSep = baseText && interimChunk && !/\s$/.test(baseText) ? ' ' : '';
@@ -381,17 +392,21 @@
       };
 
       recog.onend = () => {
-        // Continuous recognition ends itself on pauses; restart while the user
-        // still wants to dictate (bounded so a hard failure can't loop forever).
+        // Recognition ends itself on every pause (and instantly on mobile). Restart it
+        // while the user still wants to dictate — bounded so sustained silence can't loop
+        // forever (onresult resets `restarts`, so real dictation is never cut off).
         if (recording && !manualStop && restarts < 60) {
           restarts++;
           setTimeout(() => {
             if (recording && !manualStop) { try { recog.start(); } catch (_) {} }
-          }, 200);
-        } else if (!recording) {
-          stopVisualizer();
-          showRecUI(false);
+          }, 250);
+          return;
         }
+        // User tapped stop, or we gave up after sustained silence: ALWAYS clean up so the
+        // "Listening…" indicator can never get stuck on with nothing actually recording.
+        recording = false;
+        stopVisualizer();
+        showRecUI(false);
       };
 
       try { recog.start(); } catch (_) { /* start() can throw right after stop(); onend retries */ }
@@ -402,7 +417,7 @@
       baseText = promptEl.value;
       sep = baseText && !/\s$/.test(baseText) ? ' ' : '';
       showRecUI(true);
-      startVisualizer();
+      if (!isTouch) startVisualizer();   // desktop only — see isTouch note above
       startRecog();
     }
 

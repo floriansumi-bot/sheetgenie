@@ -17,6 +17,9 @@ venv/
 Thumbs.db
 *.swp
 
+# Local tooling
+.claude/
+
 # Local scratch / test artifacts
 /tmp/
 *.local.*
