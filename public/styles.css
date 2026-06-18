@@ -112,7 +112,8 @@ body {
 /* ---------- top bar ---------- */
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; padding: 14px 16px;
+  gap: 12px;
+  padding: 14px max(16px, env(safe-area-inset-right)) 14px max(16px, env(safe-area-inset-left));
   padding-top: max(14px, env(safe-area-inset-top));
   max-width: 760px; margin: 0 auto;
 }
@@ -132,7 +133,10 @@ body {
 .theme-toggle:active { transform: scale(0.94); }
 
 /* ---------- layout ---------- */
-.wrap { max-width: 760px; margin: 0 auto; padding: 8px 16px 40px; }
+.wrap {
+  max-width: 760px; margin: 0 auto;
+  padding: 8px max(16px, env(safe-area-inset-right)) calc(40px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
 
 .hero { padding: 18px 4px 22px; }
 .hero h1 {
@@ -293,7 +297,8 @@ body {
 
 /* ---------- toast / error ---------- */
 .toast {
-  position: fixed; left: 16px; right: 16px; bottom: max(16px, env(safe-area-inset-bottom));
+  position: fixed; left: max(16px, env(safe-area-inset-left)); right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
   max-width: 728px; margin: 0 auto; z-index: 50;
   padding: 12px 16px; border-radius: var(--radius-sm); font-weight: 600;
   background: var(--danger-bg); border: 1px solid rgba(248, 113, 113, 0.4);
@@ -388,7 +393,7 @@ table.preview .more-row td {
   color: var(--text-faint); font-size: 0.8rem; text-align: center; font-style: italic;
 }
 
-.footer { max-width: 760px; margin: 0 auto; padding: 8px 16px 28px; }
+.footer { max-width: 760px; margin: 0 auto; padding: 8px max(16px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
 .footer p { color: var(--text-faint); font-size: 0.82rem; margin: 0; text-align: center; }
 
 /* ---------- wider screens ---------- */
@@ -420,7 +425,7 @@ table.preview .more-row td {
   outline: none; border-color: var(--accent-1);
   box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25);
 }
-.q-actions { margin-top: 16px; display: flex; gap: 12px; }
+.q-actions { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 12px; }
 .q-actions .btn { flex: 0 1 auto; min-width: 160px; }
 
 /* ---------- layout chooser (pick a structure) ---------- */
@@ -520,7 +525,7 @@ table.preview .more-row td {
 .edit-banner-new:hover { border-color: var(--accent-1); }
 
 /* ---------- results actions ---------- */
-.results-actions { display: flex; gap: 12px; }
+.results-actions { display: flex; flex-wrap: wrap; gap: 12px; }
 .results-actions .btn { flex: 0 1 auto; min-width: 160px; }
 
 /* ---------- library ---------- */
@@ -588,6 +593,32 @@ table.preview .more-row td {
 /* ---------- success toast ---------- */
 .toast.toast-ok {
   background: rgba(52, 211, 153, 0.12); border-color: rgba(52, 211, 153, 0.4); color: var(--ok);
+}
+
+/* long unbroken strings (URLs, pasted tokens) must never force a sideways scroll */
+.tagline, .empty-sub, .sheet-desc, .notes, .improved-text,
+.layout-summary, .lib-empty { overflow-wrap: break-word; }
+
+/* ---------- iPhone: stop focus-zoom on small text fields ----------
+   iOS Safari auto-zooms when a focused control has font-size < 16px. Force 16px
+   on phones so tapping a field never yanks the layout around. */
+@media (max-width: 480px) {
+  .prompt, .data-input, .q-input, .improved-edit, .lib-search, .lib-rename { font-size: 16px; }
+}
+
+/* ---------- landscape / short viewports ----------
+   Phones in landscape (and small windows) have very little height; compress the
+   hero so the prompt and actions stay reachable without long scrolling. iPads in
+   landscape are taller than 600px, so they keep the full hero. */
+@media (orientation: landscape) and (max-height: 600px) {
+  .wrap { padding-top: 4px; }
+  .hero { padding: 2px 4px 6px; }
+  .hero h1 { font-size: clamp(1.3rem, 3.4vw, 1.7rem); margin-bottom: 2px; }
+  /* drop the marketing tagline + bullets so the input is reachable without scrolling */
+  .tagline, .hero-points { display: none; }
+  .card { padding: 14px; }
+  .card-title { margin-bottom: 10px; }
+  .prompt { min-height: 56px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
