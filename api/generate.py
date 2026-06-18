@@ -103,8 +103,10 @@ HEADER_FONT = Font(bold=True)
 TOTAL_FONT = Font(bold=True)
 TOTAL_TOP_BORDER = Border(top=Side(style="thin"))
 
-MIN_COL_WIDTH = 10
-MAX_COL_WIDTH = 40
+MIN_COL_WIDTH = 8
+MAX_COL_WIDTH = 48
+WIDTH_PADDING = 2        # breathing room beyond the widest cell in a column
+FILTER_ARROW_PAD = 3     # extra header room so the autofilter dropdown doesn't cover it
 
 
 class SpecError(ValueError):
@@ -409,10 +411,77 @@ def _unique_title(name, used):
     return title
 
 
-def _default_width(header):
-    """Sensible default column width derived from the header length, clamped."""
-    length = len(header) if isinstance(header, str) else MIN_COL_WIDTH
-    return max(MIN_COL_WIDTH, min(MAX_COL_WIDTH, length + 2))
+def _measure_cell(value, ctype):
+    """Estimate the displayed character width of one rendered cell value, so columns
+    can be sized to their actual content (not just the header)."""
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        return 5  # TRUE / FALSE
+    if ctype in ("number", "currency"):
+        if isinstance(value, (int, float)):
+            s = "{:,.2f}".format(float(value))
+            return len(s) + (4 if ctype == "currency" else 0)  # room for a symbol
+        return len(str(value))
+    if ctype == "percent":
+        if isinstance(value, (int, float)):
+            return len("{:,.1f}%".format(float(value) * 100))
+        return len(str(value))
+    if ctype == "date":
+        if isinstance(value, str):
+            t = value.strip()
+            return 10 if len(t) >= 8 else len(t)  # ISO yyyy-mm-dd renders ~10
+        return 10
+    return len(str(value))
+
+
+def _formula_cell_width(col):
+    """Estimate a calculated (formula) column's value width from its number format —
+    the actual value is computed by Excel and unknown at generation time."""
+    fmt = col.get("format")
+    if isinstance(fmt, str) and "%" in fmt:
+        return 8
+    if isinstance(fmt, str) and ("0.00" in fmt or "#,##0" in fmt):
+        return 14
+    return 12
+
+
+def _auto_widths(columns, rows, autofilter):
+    """Content-aware column sizing. Returns (widths, wrap_cols): one width per column
+    measured from the header AND the real data (clamped to [MIN, MAX]), plus the set
+    of text-column indices whose content is too long to fit and should WRAP instead of
+    stretching the column off-screen. Stops measuring a column once it hits MAX."""
+    n = len(columns)
+    arrow = FILTER_ARROW_PAD if autofilter else 0
+    widths = []
+    for col in columns:
+        header = col.get("header")
+        hlen = (len(header) if isinstance(header, str) else 0) + arrow
+        if col.get("type") == "formula":
+            hlen = max(hlen, _formula_cell_width(col))
+        widths.append(hlen)
+
+    capped = [w >= MAX_COL_WIDTH for w in widths]
+    overflow = [False] * n  # data content exceeded the cap -> wrap candidate
+    for row in rows:
+        if all(capped):
+            break
+        if not isinstance(row, list):
+            continue
+        for ci in range(n):
+            if capped[ci] or columns[ci].get("type") == "formula":
+                continue
+            val = row[ci] if ci < len(row) else None
+            w = _measure_cell(val, columns[ci].get("type"))
+            if w > widths[ci]:
+                widths[ci] = w
+                if w >= MAX_COL_WIDTH:
+                    capped[ci] = True
+                    overflow[ci] = True
+
+    final = [max(MIN_COL_WIDTH, min(MAX_COL_WIDTH, w + WIDTH_PADDING)) for w in widths]
+    wrap_cols = {ci for ci in range(n) if overflow[ci] and columns[ci].get("type") == "text"}
+    return final, wrap_cols
 
 
 def _coerce_date(value):
@@ -453,6 +522,12 @@ def _render_sheet(ws, sheet):
     columns = sheet["columns"]
     rows = sheet.get("rows") or []
     n_cols = len(columns)
+    auto_filter_on = sheet.get("autoFilter", True)
+
+    # Content-aware column sizing: measure the header AND the actual data so columns
+    # aren't left too wide (blank gaps) or too narrow (clipped text). Long-text
+    # columns are capped and wrapped rather than stretched off-screen.
+    auto_widths, wrap_cols = _auto_widths(columns, rows, auto_filter_on)
 
     # --- Headers (row 1) ---
     for ci, col in enumerate(columns, start=1):
@@ -463,13 +538,13 @@ def _render_sheet(ws, sheet):
         cell.fill = HEADER_FILL
         cell.alignment = Alignment(vertical="center", wrap_text=False)
 
-        # Column width: explicit width else sensible default from header length.
+        # Column width: explicit spec width wins; else the measured content width.
         width = col.get("width")
         letter = get_column_letter(ci)
         if isinstance(width, (int, float)) and not isinstance(width, bool) and width > 0:
             ws.column_dimensions[letter].width = float(width)
         else:
-            ws.column_dimensions[letter].width = _default_width(header)
+            ws.column_dimensions[letter].width = auto_widths[ci - 1]
 
     # --- Data rows (start at row 2) ---
     first_data_row = 2
@@ -513,14 +588,17 @@ def _render_sheet(ws, sheet):
                     target.number_format = fmt
 
             if ctype == "text":
-                target.alignment = Alignment(horizontal="left")
+                if (ci - 1) in wrap_cols:
+                    target.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+                else:
+                    target.alignment = Alignment(horizontal="left")
 
     # --- Freeze header (default true) ---
     if sheet.get("freezeHeader", True):
         ws.freeze_panes = "A2"
 
     # --- Auto filter (default true) ---
-    if sheet.get("autoFilter", True):
+    if auto_filter_on:
         end_col = get_column_letter(n_cols)
         end_row = last_data_row if rows else 1
         ws.auto_filter.ref = "A1:%s%d" % (end_col, end_row)

@@ -98,6 +98,47 @@ def test_generate():
             pass
     check("budget: chart series clamped to row 4 (not 99)", all("99" not in r for r in refs) and any("$4" in r or "4" in r for r in refs))
 
+    # --- Column auto-sizing: content-aware widths + long-text wrap ----------
+    sized = {
+        "title": "sz",
+        "sheets": [{
+            "name": "S",
+            "columns": [
+                {"header": "ID", "type": "number"},          # short header + short data
+                {"header": "Name", "type": "text"},          # data longer than the 4-char header
+                {"header": "Description", "type": "text"},    # very long data -> cap + wrap
+                {"header": "Price", "type": "currency"},
+            ],
+            "rows": [
+                [1, "Alexander Hamilton", "x" * 120, 1234.5],
+                [2, "Bob", "short", 9.99],
+            ],
+            "autoFilter": True,
+        }],
+    }
+    gen._validate_spec(sized)
+    wbS = load_workbook(io.BytesIO(gen._build_workbook(sized))).active
+    wID = wbS.column_dimensions["A"].width
+    wName = wbS.column_dimensions["B"].width
+    wDesc = wbS.column_dimensions["C"].width
+    check("width: short numeric column stays narrow (< 14)", wID is not None and wID < 14)
+    check("width: name column sized to its data, not the short header", wName >= len("Alexander Hamilton"))
+    check("width: long-text column capped at MAX", wDesc <= gen.MAX_COL_WIDTH)
+    check("width: long-text data cell wraps", bool(wbS["C2"].alignment and wbS["C2"].alignment.wrap_text))
+    check("width: normal-text column does not wrap", not (wbS["B2"].alignment and wbS["B2"].alignment.wrap_text))
+
+    # explicit spec width still wins over the auto measurement
+    expl = {"title": "e", "sheets": [{"name": "S", "columns": [{"header": "A", "type": "text", "width": 33}], "rows": [["hi"]]}]}
+    gen._validate_spec(expl)
+    check("width: explicit spec width honoured",
+          load_workbook(io.BytesIO(gen._build_workbook(expl))).active.column_dimensions["A"].width == 33.0)
+
+    # _auto_widths unit behaviour
+    aw, wrap = gen._auto_widths(sized["sheets"][0]["columns"], sized["sheets"][0]["rows"], True)
+    check("auto_widths: one clamped width per column",
+          len(aw) == 4 and all(gen.MIN_COL_WIDTH <= w <= gen.MAX_COL_WIDTH for w in aw))
+    check("auto_widths: flags the long-text column for wrap", wrap == {2})
+
     # --- Formula injection defuse (non-formula text column) -----------------
     inj = {
         "title": "inj",
