@@ -22,8 +22,14 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL") or "llama-3.3-70b-versatile"
 GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL") or "https://api.groq.com/openai/v1"
 
 
+_GEMINI_CLIENT = None
+
+
 def _probe_gemini():
-    """Return (ok, reason, model) for a tiny Gemini generation call."""
+    """Return (ok, reason, model) for a tiny Gemini generation call. Reuses one client
+    and rebuilds it once if its transport was left closed (the warm-container bug that
+    otherwise makes every reused call fail with 'client has been closed')."""
+    global _GEMINI_CLIENT
     key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not key:
         return False, "no_key", GEMINI_MODEL
@@ -31,10 +37,19 @@ def _probe_gemini():
     from google.genai import errors as gerrors
     from google.genai import types as gtypes
     try:
-        genai.Client(api_key=key).models.generate_content(
-            model=GEMINI_MODEL, contents="ping",
-            config=gtypes.GenerateContentConfig(max_output_tokens=5))
-        return True, "ok", GEMINI_MODEL
+        for attempt in (0, 1):
+            try:
+                if _GEMINI_CLIENT is None:
+                    _GEMINI_CLIENT = genai.Client(api_key=key)
+                _GEMINI_CLIENT.models.generate_content(
+                    model=GEMINI_MODEL, contents="ping",
+                    config=gtypes.GenerateContentConfig(max_output_tokens=5))
+                return True, "ok", GEMINI_MODEL
+            except RuntimeError as exc:
+                if "closed" in str(exc).lower() and attempt == 0:
+                    _GEMINI_CLIENT = None
+                    continue
+                raise
     except gerrors.APIError as exc:
         code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
         msg = str(getattr(exc, "message", "") or exc).lower()

@@ -560,6 +560,31 @@ def _gemini_reason(exc):
     return "error"
 
 
+# Reuse ONE Gemini client. Creating a fresh client per request and letting it be
+# garbage-collected can leave google-genai's shared transport closed on a WARM
+# serverless container, so every later call fails with "client has been closed".
+# A singleton (rebuilt if it ever closes) avoids that churn — this was observed
+# taking the live primary provider down on warmed-up Vercel instances.
+_GEMINI_CLIENT = None
+
+
+def _gemini_generate(contents, config):
+    """generate_content via a reused client, rebuilding it once if the transport was
+    left closed (the warm-container failure mode)."""
+    global _GEMINI_CLIENT
+    for attempt in (0, 1):
+        try:
+            if _GEMINI_CLIENT is None:
+                _GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
+            return _GEMINI_CLIENT.models.generate_content(
+                model=GEMINI_MODEL, contents=contents, config=config)
+        except RuntimeError as exc:
+            if "closed" in str(exc).lower() and attempt == 0:
+                _GEMINI_CLIENT = None  # drop the dead client and retry once
+                continue
+            raise
+
+
 def _call_gemini(system, user_text, files):
     """Call Google Gemini (free tier). Returns the model's text. Raises
     _ProviderError. Supports images + PDFs and Google-Search grounding."""
@@ -583,11 +608,9 @@ def _call_gemini(system, user_text, files):
         cfg["thinking_config"] = gtypes.ThinkingConfig(thinking_budget=0)
 
     try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        resp = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[gtypes.Content(role="user", parts=parts)],
-            config=gtypes.GenerateContentConfig(**cfg),
+        resp = _gemini_generate(
+            [gtypes.Content(role="user", parts=parts)],
+            gtypes.GenerateContentConfig(**cfg),
         )
     except gerrors.APIError as exc:
         raise _ProviderError(_gemini_reason(exc), str(exc)[:200])
