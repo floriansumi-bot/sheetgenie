@@ -111,6 +111,13 @@ class handler(BaseHTTPRequestHandler):
             out = {"ok": ok, "reason": reason, "provider": provider}
             if ok:
                 out["model"] = model
+            elif provider == "groq" and reason in ("auth", "error"):
+                # Safe, non-secret fingerprint to debug a bad key/paste: the prefix
+                # (which provider's key it is) + length. A valid Groq key looks like
+                # "gsk_…/56"; anything else (wrong prefix, odd length, a stray quote)
+                # points straight at the misconfigured value.
+                k = os.environ.get("GROQ_API_KEY") or ""
+                out["keyfmt"] = (k[:4] + "…/" + str(len(k))) if k else "missing"
             self._json(200, out)
         except Exception:  # noqa: BLE001 — never 500 a health probe
             self._json(200, {"ok": False, "reason": "error"})
