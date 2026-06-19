@@ -408,14 +408,15 @@ no code fences, no text before or after. Shape: {"status": "ready" | "needs_inpu
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Provider chain: free Gemini is primary, Grok (xAI) is the fallback. Reorder or
-# limit via the PROVIDERS env var (comma-separated, e.g. "gemini,grok" or "gemini").
+# Provider chain: free Gemini is primary, free Groq is the fallback (so the app
+# stays up when Gemini's daily quota is spent); paid Grok (xAI) is optional last.
+# Reorder/limit via the PROVIDERS env var (comma-separated, e.g. "gemini,groq").
 # Each provider is skipped if its key is missing; on a transient failure we fall
 # through to the next. See docs/DEPLOY.md / .env.example.
 def _provider_chain():
-    raw = (os.environ.get("PROVIDERS") or "gemini,grok").lower()
-    chain = [p.strip() for p in raw.split(",") if p.strip() in ("gemini", "grok")]
-    return chain or ["gemini", "grok"]
+    raw = (os.environ.get("PROVIDERS") or "gemini,groq").lower()
+    chain = [p.strip() for p in raw.split(",") if p.strip() in ("gemini", "groq", "grok")]
+    return chain or ["gemini", "groq"]
 
 
 PROVIDER_CHAIN = _provider_chain()
@@ -424,8 +425,15 @@ PROVIDER_CHAIN = _provider_chain()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
 
-# xAI Grok (OpenAI-compatible). Default to the current multimodal flagship so image
-# uploads still work on the fallback path; override via XAI_MODEL. NOTE: Grok is a
+# Groq (OpenAI-compatible): FREE and very fast inference of capable open models —
+# the recommended fallback so the app stays up when Gemini's free quota is spent.
+# Text only on this path (the primary handles images/PDFs). Override via GROQ_MODEL.
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GROQ_MODEL = os.environ.get("GROQ_MODEL") or "llama-3.3-70b-versatile"
+GROQ_BASE_URL = os.environ.get("GROQ_BASE_URL") or "https://api.groq.com/openai/v1"
+
+# xAI Grok (OpenAI-compatible, optional). Default to the current multimodal flagship
+# so image uploads still work on this path; override via XAI_MODEL. NOTE: Grok is a
 # PAID fallback — an xAI account with credit is required, else the API returns 403.
 XAI_API_KEY = os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY")
 XAI_MODEL = os.environ.get("XAI_MODEL") or "grok-4.3"
@@ -641,6 +649,44 @@ def _call_grok(system, user_text, files):
     return text
 
 
+def _call_groq(system, user_text, files):
+    """Call Groq (OpenAI-compatible) — a FREE, fast fallback. Text only: any attached
+    images/PDFs are noted but not read (the primary provider handles attachments).
+    Returns the model's text. Raises _ProviderError."""
+    if not GROQ_API_KEY:
+        raise _ProviderError("no_key")
+
+    user = user_text
+    if files:
+        user += ("\n\n(Attachments were provided but can't be read on this fallback "
+                 "path — build from the text above.)")
+
+    try:
+        client = OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
+        resp = client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": user}],
+            max_tokens=MAX_TOKENS,
+        )
+    except openai.RateLimitError as exc:
+        raise _ProviderError("rate_limit", str(exc)[:200])
+    except openai.AuthenticationError as exc:
+        raise _ProviderError("auth", str(exc)[:200])
+    except openai.APIError as exc:
+        raise _ProviderError("error", str(exc)[:200])
+    except Exception as exc:  # noqa: BLE001
+        raise _ProviderError("error", str(exc)[:200])
+
+    try:
+        text = resp.choices[0].message.content
+    except Exception:  # noqa: BLE001
+        text = None
+    if not text:
+        raise _ProviderError("error", "empty response")
+    return text
+
+
 def _generate(system, user_text, files):
     """Try each provider in PROVIDER_CHAIN; return the first text response. Raises
     _ProviderError with the most actionable reason if every provider fails."""
@@ -649,6 +695,8 @@ def _generate(system, user_text, files):
         try:
             if provider == "gemini":
                 return _call_gemini(system, user_text, files)
+            if provider == "groq":
+                return _call_groq(system, user_text, files)
             if provider == "grok":
                 return _call_grok(system, user_text, files)
         except _ProviderError as pe:
@@ -845,7 +893,7 @@ class handler(BaseHTTPRequestHandler):
                 return
 
             # --- Check configuration ----------------------------------------
-            if not (GEMINI_API_KEY or XAI_API_KEY):
+            if not (GEMINI_API_KEY or GROQ_API_KEY or XAI_API_KEY):
                 self._send_json(
                     500,
                     {"error": "The server is not configured yet (no AI provider key)."},

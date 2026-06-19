@@ -333,8 +333,9 @@ def _drive(imp, body_bytes, content_length=None, env=None):
     return captured["status"], parsed, h.messages_ref if hasattr(h, "messages_ref") else None
 
 
-def _set_keys(imp, gemini="g-key", xai=None):
+def _set_keys(imp, gemini="g-key", groq=None, xai=None):
     imp.GEMINI_API_KEY = gemini
+    imp.GROQ_API_KEY = groq
     imp.XAI_API_KEY = xai
 
 
@@ -342,6 +343,7 @@ def test_improve():
     print("\n[improve.py]")
     imp = _load("improve_mod", os.path.join("api", "improve.py"))
     _set_keys(imp)  # configured (Gemini key present) by default
+    real_generate = imp._generate  # keep a handle to the real chain runner
 
     def gen_returns(text, store=None):
         def _g(system, user_text, files):
@@ -372,11 +374,34 @@ def test_improve():
     check("needs_input: 200 passthrough with status", status == 200 and parsed.get("status") == "needs_input")
     check("needs_input: questions present", isinstance(parsed.get("questions"), list) and len(parsed["questions"]) == 1)
 
-    # config: provider chain default is gemini -> grok
-    check("config: provider chain is gemini then grok", imp.PROVIDER_CHAIN == ["gemini", "grok"])
+    # config: provider chain default is gemini -> groq (both free)
+    check("config: provider chain is gemini then groq", imp.PROVIDER_CHAIN == ["gemini", "groq"])
 
-    # no provider key -> 500
-    _set_keys(imp, gemini=None, xai=None)
+    # provider fallthrough: when gemini fails, the free Groq fallback answers
+    _sc, _sg, _sq = imp.PROVIDER_CHAIN, imp._call_gemini, imp._call_groq
+    def _raise_rl(s, u, f): raise imp._ProviderError("rate_limit")
+    imp.PROVIDER_CHAIN = ["gemini", "groq"]
+    imp._call_gemini = _raise_rl
+    imp._call_groq = lambda s, u, f: "GROQ-OUT"
+    check("fallthrough: groq answers when gemini is rate-limited", real_generate("s", "u", []) == "GROQ-OUT")
+    imp.PROVIDER_CHAIN, imp._call_gemini, imp._call_groq = _sc, _sg, _sq
+
+    # _call_groq with no key is skipped (no_key) so the chain falls through cleanly
+    _gk = imp.GROQ_API_KEY; imp.GROQ_API_KEY = None
+    try:
+        imp._call_groq("s", "u", []); check("groq: missing key raises", False)
+    except imp._ProviderError as e:
+        check("groq: missing key -> no_key", e.reason == "no_key")
+    imp.GROQ_API_KEY = _gk
+
+    # only a Groq key configured (no Gemini) is still a valid configuration
+    _set_keys(imp, gemini=None, groq="q-key", xai=None)
+    status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode())
+    check("config: groq-only key is configured (not 500-not-configured)",
+          not (status == 500 and "not configured" in (parsed or {}).get("error", "")))
+
+    # no provider key at all -> 500
+    _set_keys(imp, gemini=None, groq=None, xai=None)
     status, parsed, _ = _drive(imp, json.dumps({"prompt": "x"}).encode())
     check("no key: 500", status == 500)
     check("no key: 'not configured' message", "not configured" in (parsed or {}).get("error", ""))
