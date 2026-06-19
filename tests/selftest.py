@@ -591,9 +591,66 @@ def test_improve():
           (ej('{"foo":1} then {"status":"needs_input","notes":"n"}') or {}).get("status") == "needs_input")
     check("extract: pure garbage -> None", ej("no json here at all") is None)
 
+    # canQueue surfaces only when a backup worker (PI_WORKER_URL) is configured
+    imp._generate = gen_raises("rate_limit")
+    _pw = imp.PI_WORKER_URL
+    imp.PI_WORKER_URL = None
+    _, p_off, _ = _drive(imp, json.dumps({"prompt": "x"}).encode())
+    check("canQueue: absent when no worker configured", not (p_off or {}).get("canQueue"))
+    imp.PI_WORKER_URL = "https://pi.example.com"
+    _, p_on, _ = _drive(imp, json.dumps({"prompt": "x"}).encode())
+    check("canQueue: present when worker configured", (p_on or {}).get("canQueue") is True)
+    imp.PI_WORKER_URL = _pw
+
+
+def test_queue():
+    print("\n[queue.py]")
+    import urllib.request as _ur
+    import urllib.error as _ue
+    q = _load("queue_mod", os.path.join("api", "queue.py"))
+
+    # not configured -> 503
+    q.PI_WORKER_URL = None
+    status, _, _ = _drive(q, json.dumps({"prompt": "x", "email": "a@b.co"}).encode())
+    check("queue: no worker configured -> 503", status == 503)
+
+    q.PI_WORKER_URL = "https://pi.example.com"
+    status, _, _ = _drive(q, json.dumps({"email": "a@b.co"}).encode())
+    check("queue: missing prompt -> 400", status == 400)
+    status, _, _ = _drive(q, json.dumps({"prompt": "x", "email": "not-an-email"}).encode())
+    check("queue: invalid email -> 400", status == 400)
+
+    class _R:
+        def __init__(self, st): self.status = st
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    captured = {}
+    def _ok(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["secret"] = req.headers.get("X-worker-secret")
+        return _R(202)
+
+    _orig = _ur.urlopen
+    _ur.urlopen = _ok
+    q.PI_WORKER_SECRET = "s3cret"
+    try:
+        status, parsed, _ = _drive(q, json.dumps({"prompt": "budget", "email": "a@b.co", "data": "x"}).encode())
+        check("queue: success -> 200 queued", status == 200 and (parsed or {}).get("queued") is True)
+        check("queue: forwards to /generate-async", str(captured.get("url", "")).endswith("/generate-async"))
+        check("queue: sends the shared secret header", captured.get("secret") == "s3cret")
+
+        def _boom(req, timeout=None): raise _ue.URLError("down")
+        _ur.urlopen = _boom
+        status, _, _ = _drive(q, json.dumps({"prompt": "x", "email": "a@b.co"}).encode())
+        check("queue: worker unreachable -> 504", status == 504)
+    finally:
+        _ur.urlopen = _orig
+
 
 if __name__ == "__main__":
     test_generate()
     test_improve()
+    test_queue()
     print("\n==== %d passed, %d failed ====" % (PASSED, FAILED))
     sys.exit(1 if FAILED else 0)

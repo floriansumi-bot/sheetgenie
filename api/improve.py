@@ -439,6 +439,12 @@ XAI_API_KEY = os.environ.get("XAI_API_KEY") or os.environ.get("GROK_API_KEY")
 XAI_MODEL = os.environ.get("XAI_MODEL") or "grok-4.3"
 XAI_BASE_URL = os.environ.get("XAI_BASE_URL") or "https://api.x.ai/v1"
 
+# Optional self-hosted "last resort" worker (e.g. a Raspberry Pi running a local
+# LLM). When set, and every cloud provider is busy, the client can QUEUE the job and
+# have the result EMAILED (see api/queue.py + pi/worker.py). This flag only tells the
+# client the option exists; it's inert (no behaviour change) when unset.
+PI_WORKER_URL = os.environ.get("PI_WORKER_URL")
+
 # Output token ceiling. Kept moderate so generation comfortably finishes inside
 # Vercel's 60s function limit; raise via MAX_TOKENS for very large data fills.
 try:
@@ -983,23 +989,29 @@ class handler(BaseHTTPRequestHandler):
                 text = _generate(SYSTEM_PROMPT, user_text, files)
             except _ProviderError as pe:
                 traceback.print_exc(file=sys.stderr)
+                can_queue = bool(PI_WORKER_URL)
+                tail = (" You can have our backup server build it and email it to you "
+                        "(it takes a few minutes)." if can_queue
+                        else " Please try again in a few minutes.")
                 if pe.reason == "rate_limit":
                     self._send_json(
                         503,
-                        {"error": "The AI is over its usage limit right now "
-                                  "(free-tier rate limit). Please try again in a few minutes."},
+                        {"error": "Our fast AI is over its usage limit right now." + tail,
+                         "canQueue": can_queue},
                     )
                 elif pe.reason in ("auth", "quota", "no_key"):
                     self._send_json(
                         503,
-                        {"error": "The AI is temporarily unavailable. Please try again "
-                                  "later — your work isn't lost."},
+                        {"error": "The AI is temporarily unavailable." + (tail if can_queue
+                                  else " Please try again later — your work isn't lost."),
+                         "canQueue": can_queue},
                     )
                 else:
                     self._send_json(
                         500,
                         {"error": "Something went wrong generating your spreadsheet plan. "
-                                  "Please try again."},
+                                  "Please try again.",
+                         "canQueue": can_queue},
                     )
                 return
 

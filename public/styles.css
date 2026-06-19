@@ -590,6 +590,18 @@ table.preview .more-row td {
 .lib-act.lib-del:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-bg); }
 .lib-empty { color: var(--text-faint); font-size: 0.9rem; margin: 4px 2px 0; }
 
+/* ---------- backup-server queue offer (email me the result) ---------- */
+.queue-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-left: 4px solid var(--accent-2); border-radius: var(--radius);
+  padding: 16px 18px; box-shadow: var(--shadow);
+}
+.queue-card .eyebrow { margin: 0 0 6px; }
+.queue-card .notes { margin: 0 0 14px; color: var(--text-dim); font-size: 0.95rem; }
+.queue-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.queue-row .q-input { flex: 1 1 220px; min-width: 0; }
+.queue-row .btn { flex: 0 0 auto; min-width: 160px; }
+
 /* ---------- success toast ---------- */
 .toast.toast-ok {
   background: rgba(52, 211, 153, 0.12); border-color: rgba(52, 211, 153, 0.4); color: var(--ok);

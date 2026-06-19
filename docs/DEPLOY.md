@@ -48,6 +48,13 @@ git push -u origin main
 
 Every future `git push` to `main` auto-redeploys. That's it — it stays online.
 
+### Optional: a self-hosted "last resort" fallback (Raspberry Pi)
+If you want the app to *never* show "AI is busy" — even if both free cloud providers
+are exhausted — you can add a home server (e.g. a Raspberry Pi) running a local LLM.
+When all cloud providers are busy, the site offers to **email** the finished file,
+and the Pi builds it in the background (no time limit). Fully optional and inert
+unless you set `PI_WORKER_URL` / `PI_WORKER_SECRET`. Setup guide: [`pi/README.md`](../pi/README.md).
+
 ### Install it as an app
 Open the live URL on your phone/computer → browser menu → **Install / Add to Home Screen**.
 

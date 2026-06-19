@@ -486,6 +486,7 @@
   let pendingFiles = [];
   let pendingBaseSpec = null;
   let pendingClarifications = null;   // answers in play, so a layout pick can resend them
+  let lastChosenLayout = null;        // remembered so a queued (backup) job can reuse it
 
   function onImprove() {
     if (busy) return;
@@ -520,6 +521,7 @@
     clearError();
     setBusy(true);
     pendingClarifications = clarifications || null;
+    lastChosenLayout = chosenLayout || null;
     // A fresh request invalidates any prior spec. An EDIT keeps the base spec so a
     // failed "Apply changes" leaves the loaded file intact and still downloadable.
     if (!pendingBaseSpec) {
@@ -560,6 +562,9 @@
       try { payload = await res.json(); } catch (_) { payload = null; }
 
       if (!res.ok || !payload || payload.error) {
+        // All cloud providers busy + a backup worker is configured → offer the
+        // "email me the finished file" path instead of a dead-end error.
+        if (payload && payload.canQueue) { renderQueueOffer(payload.error); return; }
         showError((payload && payload.error) ? payload.error
           : 'The improve step failed (' + res.status + '). Please try again.');
         return;
@@ -710,6 +715,70 @@
 
     wrap.appendChild(grid);
     resultsEl.appendChild(wrap);
+  }
+
+  // Every cloud provider was busy and a self-hosted backup is configured. Collect an
+  // email and queue the job (POST /api/queue): the backup server builds the file and
+  // emails it in a few minutes, so we don't block on the platform's request limit.
+  function renderQueueOffer(message) {
+    resultsEl.replaceChildren();
+    const card = el('div', { class: 'queue-card' });
+    card.appendChild(el('p', { class: 'eyebrow', text: 'Fast AI is busy' }));
+    card.appendChild(el('p', { class: 'notes',
+      text: message || 'Our fast AI is busy right now. Our backup server can still build this — it takes a few minutes.' }));
+
+    const row = el('div', { class: 'queue-row' });
+    const input = el('input', { class: 'q-input', attrs: {
+      type: 'email', inputmode: 'email', autocomplete: 'email', enterkeyhint: 'send',
+      placeholder: 'you@example.com', 'aria-label': 'Your email address' } });
+    const btn = el('button', { class: 'btn btn-primary', attrs: { type: 'button' }, text: 'Email it to me' });
+    row.appendChild(input);
+    row.appendChild(btn);
+    card.appendChild(row);
+    card.appendChild(el('p', { class: 'attach-hint',
+      text: 'We’ll email the finished spreadsheet here in a few minutes. (Photos/PDFs aren’t read on the backup path.)' }));
+
+    const submit = async () => {
+      const email = input.value.trim();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        showError('Please enter a valid email address.'); input.focus(); return;
+      }
+      btn.disabled = true; input.disabled = true;
+      const lbl = btn.textContent; btn.textContent = 'Queueing…';
+      try {
+        const res = await fetchWithTimeout('/api/queue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify({
+            prompt: pendingPrompt, data: pendingData,
+            clarifications: pendingClarifications, chosenLayout: lastChosenLayout,
+            locale: (navigator.language || ''), email: email,
+          }),
+        }, 30000);
+        let p = null; try { p = await res.json(); } catch (_) { p = null; }
+        if (res.ok && p && p.queued) {
+          resultsEl.replaceChildren();
+          const done = el('div', { class: 'queue-card' });
+          done.appendChild(el('p', { class: 'eyebrow', text: 'On its way ✓' }));
+          done.appendChild(el('p', { class: 'notes',
+            text: 'Got it! The backup server is building your spreadsheet and will email it to '
+                  + email + ' in a few minutes. You can safely close this page.' }));
+          resultsEl.appendChild(done);
+        } else {
+          btn.disabled = false; input.disabled = false; btn.textContent = lbl;
+          showError((p && p.error) ? p.error : 'Could not queue the job. Please try again later.');
+        }
+      } catch (_) {
+        btn.disabled = false; input.disabled = false; btn.textContent = lbl;
+        showError('Could not reach the server. Please try again later.');
+      }
+    };
+    btn.addEventListener('click', submit);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+
+    resultsEl.appendChild(card);
+    resultsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(() => { try { input.focus(); } catch (_) {} }, 50);
   }
 
   /* ============================================================
