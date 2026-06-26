@@ -380,13 +380,13 @@
         const code = event && event.error;
         if (code === 'no-speech' || code === 'aborted') return;  // transient — onend restarts
         if (code === 'not-allowed' || code === 'service-not-allowed') {
-          showError('Microphone access is blocked — allow it in your browser settings, or type instead.');
+          showError('Microphone access is blocked. Allow it in your browser settings, or type instead.');
         } else if (code === 'audio-capture') {
           showError('No microphone was found. You can type instead.');
         } else if (code === 'network') {
           showError('Voice needs an internet connection right now. You can type instead.');
         } else {
-          showError('Voice had a hiccup — tap the mic to try again, or type.');
+          showError('Voice had a hiccup. Tap the mic to try again, or type.');
         }
         endRecording();
       };
@@ -545,8 +545,8 @@
     // body limit, else the server 413s only after a wasted upload.
     if (JSON.stringify(body).length > 3900000) {
       showError(pendingBaseSpec
-        ? 'This spreadsheet plus the new data is too large to edit at once — remove an attachment or split the change.'
-        : 'That request is too large — remove an attachment or shorten the data.');
+        ? 'This spreadsheet plus the new data is too large to edit at once. Remove an attachment or split the change.'
+        : 'That request is too large. Remove an attachment or shorten the data.');
       setBusy(false);
       return;
     }
@@ -674,7 +674,7 @@
     wrap.appendChild(el('p', { class: 'eyebrow', text: 'Pick a layout' }));
     wrap.appendChild(el('p', {
       class: 'notes',
-      text: payload.notes || 'A few ways to organise this — pick the one you like and I’ll build it.',
+      text: payload.notes || 'A few ways to organise this. Pick the one you like and I’ll build it.',
     }));
 
     const grid = el('div', { class: 'layouts-grid' });
@@ -725,7 +725,7 @@
     const card = el('div', { class: 'queue-card' });
     card.appendChild(el('p', { class: 'eyebrow', text: 'Fast AI is busy' }));
     card.appendChild(el('p', { class: 'notes',
-      text: message || 'Our fast AI is busy right now. Our backup server can still build this — it takes a few minutes.' }));
+      text: message || 'Our fast AI is busy right now. Our backup server can still build this, though it takes a few minutes.' }));
 
     const row = el('div', { class: 'queue-row' });
     const input = el('input', { class: 'q-input', attrs: {
@@ -791,7 +791,7 @@
     // library files have no improvedPrompt, so they show just the note.)
     if (payload.improvedPrompt) {
       const improvedCard = el('div', { class: 'improved-card' });
-      improvedCard.appendChild(el('p', { class: 'eyebrow', text: 'Improved prompt — tweak it, then regenerate' }));
+      improvedCard.appendChild(el('p', { class: 'eyebrow', text: 'Improved prompt, tweak it then regenerate' }));
       const ta = el('textarea', { class: 'improved-edit', attrs: { rows: '3', 'aria-label': 'Improved prompt (editable)' } });
       ta.value = payload.improvedPrompt;
       improvedCard.appendChild(ta);
@@ -799,7 +799,7 @@
       const regenBtn = el('button', { class: 'btn btn-secondary improved-regen', attrs: { type: 'button' }, text: '↻ Regenerate from this' });
       regenBtn.addEventListener('click', () => {
         const refined = ta.value.trim();
-        if (!refined) { showError('The improved prompt is empty — type what you want.'); return; }
+        if (!refined) { showError('The improved prompt is empty. Type what you want.'); return; }
         pendingPrompt = refined;
         pendingBaseSpec = null;   // a refined full prompt -> a fresh spec (keeps any data/files added)
         runImprove(null, null, true);   // build directly — don't re-propose layouts
@@ -893,7 +893,7 @@
       const tr = el('tr');
       const td = el('td', {
         class: 'empty',
-        text: 'Empty template — no sample rows',
+        text: 'Empty template, no sample rows',
         attrs: { colspan: String(columns.length) },
       });
       tr.appendChild(td);
@@ -1226,7 +1226,7 @@
     enterEditMode(rec.spec, rec.title);
     renderResults({
       improvedPrompt: null,
-      notes: 'Loaded “' + (rec.title || 'spreadsheet') + '”. Describe a change or add data above and tap Apply changes — or just Download.',
+      notes: 'Loaded “' + (rec.title || 'spreadsheet') + '”. Describe a change or add data above and tap Apply changes, or just Download.',
       spec: rec.spec,
     });
     setLibraryOpen(false);
@@ -1289,7 +1289,7 @@
   async function exportLibrary() {
     let items = [];
     try { items = await libAll(); } catch (_) { items = []; }
-    if (!items.length) { showError('Your library is empty — nothing to export yet.'); return; }
+    if (!items.length) { showError('Your library is empty, nothing to export yet.'); return; }
     const backup = {
       app: 'sheetgenie',
       kind: 'library-backup',
